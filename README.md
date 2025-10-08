@@ -342,7 +342,17 @@ cargo clippy          # Lint Rust code
 
 ## License
 
-[Your License Here]
+This project is licensed under the **GNU General Public License v3.0** (GPL-3.0).
+
+You are free to use, modify, and distribute this software under the terms of the GPL-3.0 license. See the [LICENSE](LICENSE) file for the full license text.
+
+**In summary:**
+- ✅ You can use this software for any purpose
+- ✅ You can modify the source code
+- ✅ You can distribute copies
+- ✅ You must disclose the source code when distributing
+- ✅ Any modifications must also be GPL-3.0 licensed
+- ⚠️ The software is provided without warranty
 
 ## Support
 
