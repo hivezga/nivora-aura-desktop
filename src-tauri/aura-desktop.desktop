@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Nivora Aura
+Comment=Privacy-focused local-first voice AI assistant
+Exec=env WEBKIT_DISABLE_COMPOSITING_MODE=1 aura-desktop
+Icon=aura-desktop
+Categories=AudioVideo;Audio;Office;Utility;
+Terminal=false
+StartupWMClass=aura-desktop
