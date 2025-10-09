@@ -3,12 +3,16 @@ mod tts;
 mod llm;
 mod database;
 mod secrets;
+mod error;
 
 use native_voice::NativeVoicePipeline;
 use tts::TextToSpeech;
 use llm::LLMEngine;
 use database::{Database, DatabaseState, Conversation, Message, Settings, get_database_path};
-use std::sync::{Arc, Mutex};
+use error::AuraError;
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
+use std::sync::Mutex as StdMutex;
 use tauri::{Manager, State, Emitter};
 use serde::Serialize;
 
@@ -26,55 +30,46 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-async fn handle_user_prompt(prompt: String, llm_engine: State<'_, Arc<Mutex<LLMEngine>>>) -> Result<String, String> {
+async fn handle_user_prompt(prompt: String, llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>) -> Result<String, AuraError> {
     log::info!("Tauri command: handle_user_prompt called with: '{}'", prompt);
 
-    // Clone the Arc to use in the async block
-    let llm_engine_clone = llm_engine.inner().clone();
-
-    // Spawn a blocking task to handle the mutex lock and async call
-    let result = tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Handle::current();
-        let llm = llm_engine_clone.lock()
-            .map_err(|e| format!("Failed to lock LLM engine: {}", e))?;
-
-        runtime.block_on(llm.generate_response(&prompt))
-    }).await
-    .map_err(|e| format!("Task panicked: {}", e))??;
+    let llm = llm_engine.inner().lock().await;
+    let result = llm.generate_response(&prompt).await
+        .map_err(|e| AuraError::Llm(e))?;
 
     Ok(result)
 }
 
 #[tauri::command]
-async fn listen_and_transcribe(voice_pipeline: State<'_, Arc<Mutex<NativeVoicePipeline>>>) -> Result<String, String> {
+async fn listen_and_transcribe(voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>) -> Result<String, AuraError> {
     log::info!("Tauri command: listen_and_transcribe called (Push-to-Talk)");
 
+    // Use spawn_blocking because NativeVoicePipeline uses std::sync::Mutex internally
+    // (required for audio thread compatibility)
     let voice_pipeline_clone = voice_pipeline.inner().clone();
 
-    // Spawn blocking task for sync operation
     let result = tokio::task::spawn_blocking(move || {
-        let voice_pipeline = voice_pipeline_clone.lock()
-            .map_err(|e| format!("Failed to lock voice pipeline: {}", e))?;
+        let pipeline = voice_pipeline_clone.lock()
+            .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
-        voice_pipeline.start_transcription()
+        pipeline.start_transcription()
+            .map_err(|e| AuraError::VoicePipeline(e))
     }).await
-    .map_err(|e| format!("Task panicked: {}", e))??;
+    .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     Ok(result)
 }
 
 #[tauri::command]
-fn speak_text(text: String, tts_engine: State<'_, Arc<Mutex<TextToSpeech>>>) -> Result<(), String> {
+async fn speak_text(text: String, tts_engine: State<'_, Arc<TokioMutex<TextToSpeech>>>) -> Result<(), AuraError> {
     log::info!("Tauri command: speak_text called ({} chars)", text.len());
     log::info!("Text to speak: '{}'", if text.len() > 100 { format!("{}...", &text[..100]) } else { text.clone() });
 
-    let mut tts = tts_engine.inner().lock().map_err(|e| {
-        log::error!("Failed to lock TTS engine: {}", e);
-        format!("Failed to lock TTS engine: {}", e)
-    })?;
+    let mut tts = tts_engine.inner().lock().await;
 
     log::info!("TTS engine locked, calling speak()...");
-    let result = tts.speak(&text);
+    let result = tts.speak(&text)
+        .map_err(|e| AuraError::Tts(e));
 
     match &result {
         Ok(_) => log::info!("✓ TTS speak() completed successfully"),
@@ -85,133 +80,114 @@ fn speak_text(text: String, tts_engine: State<'_, Arc<Mutex<TextToSpeech>>>) -> 
 }
 
 #[tauri::command]
-async fn cancel_generation(llm_engine: State<'_, Arc<Mutex<LLMEngine>>>) -> Result<(), String> {
+async fn cancel_generation(llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>) -> Result<(), AuraError> {
     log::info!("Tauri command: cancel_generation called");
 
-    // Clone the Arc to use in async block
-    let llm_engine_clone = llm_engine.inner().clone();
-
-    // Spawn a blocking task to lock the mutex, then call async cancel_generation
-    tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Handle::current();
-        let llm = llm_engine_clone.lock()
-            .map_err(|e| format!("Failed to lock LLM engine: {}", e))?;
-
-        // Call the async cancel_generation method
-        runtime.block_on(llm.cancel_generation());
-
-        Ok::<(), String>(())
-    }).await
-    .map_err(|e| format!("Task panicked: {}", e))??;
+    let llm = llm_engine.inner().lock().await;
+    llm.cancel_generation().await;
 
     Ok(())
 }
 
 #[tauri::command]
-fn cancel_recording(voice_pipeline: State<'_, Arc<Mutex<NativeVoicePipeline>>>) -> Result<(), String> {
+async fn cancel_recording(voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>) -> Result<(), AuraError> {
     log::info!("Tauri command: cancel_recording called");
 
-    let voice_pipeline = voice_pipeline.inner().lock()
-        .map_err(|e| format!("Failed to lock voice pipeline: {}", e))?;
+    let voice_pipeline_clone = voice_pipeline.inner().clone();
 
-    // Use the new cancel_and_reset method for clean state reset
-    voice_pipeline.cancel_and_reset()
+    tokio::task::spawn_blocking(move || {
+        let pipeline = voice_pipeline_clone.lock()
+            .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
+
+        // Use the new cancel_and_reset method for clean state reset
+        pipeline.cancel_and_reset()
+            .map_err(|e| AuraError::VoicePipeline(e))
+    }).await
+    .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
+
+    Ok(())
 }
 
 // Database Commands
 
 #[tauri::command]
-fn load_conversations(db: State<'_, DatabaseState>) -> Result<Vec<Conversation>, String> {
+async fn load_conversations(db: State<'_, DatabaseState>) -> Result<Vec<Conversation>, AuraError> {
     log::info!("Tauri command: load_conversations called");
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
+    let db = db.inner().lock().await;
     db.load_conversations()
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-fn load_messages(conversation_id: i64, db: State<'_, DatabaseState>) -> Result<Vec<Message>, String> {
+async fn load_messages(conversation_id: i64, db: State<'_, DatabaseState>) -> Result<Vec<Message>, AuraError> {
     log::info!("Tauri command: load_messages called for conversation {}", conversation_id);
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
+    let db = db.inner().lock().await;
     db.load_messages(conversation_id)
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-fn create_new_conversation(db: State<'_, DatabaseState>) -> Result<i64, String> {
+async fn create_new_conversation(db: State<'_, DatabaseState>) -> Result<i64, AuraError> {
     log::info!("Tauri command: create_new_conversation called");
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
+    let db = db.inner().lock().await;
     db.create_conversation(None)
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-fn save_message(
+async fn save_message(
     conversation_id: i64,
     role: String,
     content: String,
     db: State<'_, DatabaseState>
-) -> Result<i64, String> {
+) -> Result<i64, AuraError> {
     log::debug!("Tauri command: save_message called (conversation: {}, role: {})", conversation_id, role);
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
+    let db = db.inner().lock().await;
     db.save_message(conversation_id, &role, &content)
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-fn delete_conversation(conversation_id: i64, db: State<'_, DatabaseState>) -> Result<(), String> {
+async fn delete_conversation(conversation_id: i64, db: State<'_, DatabaseState>) -> Result<(), AuraError> {
     log::info!("Tauri command: delete_conversation called for conversation {}", conversation_id);
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
+    let db = db.inner().lock().await;
     db.delete_conversation(conversation_id)
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-fn update_conversation_title(
+async fn update_conversation_title(
     conversation_id: i64,
     title: String,
     db: State<'_, DatabaseState>
-) -> Result<(), String> {
+) -> Result<(), AuraError> {
     log::info!("Tauri command: update_conversation_title called for conversation {} with title: {}", conversation_id, title);
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
-
+    let db = db.inner().lock().await;
     db.update_conversation_title(conversation_id, &title)
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
 async fn generate_conversation_title(
     prompt: String,
-    llm_engine: State<'_, Arc<Mutex<LLMEngine>>>
-) -> Result<String, String> {
+    llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>
+) -> Result<String, AuraError> {
     log::info!("Tauri command: generate_conversation_title called");
 
-    // Clone the Arc to use in the async block
-    let llm_engine_clone = llm_engine.inner().clone();
     let title_prompt = format!(
         "Create a very short title (maximum 5 words, no quotes) for a conversation starting with: '{}'",
         prompt.chars().take(150).collect::<String>()
     );
 
-    // Spawn a blocking task to handle the mutex lock and async call
-    let raw_title = tokio::task::spawn_blocking(move || {
-        let runtime = tokio::runtime::Handle::current();
-        let llm = llm_engine_clone.lock()
-            .map_err(|e| format!("Failed to lock LLM engine: {}", e))?;
-
-        runtime.block_on(llm.generate_response(&title_prompt))
-    }).await
-    .map_err(|e| format!("Task panicked: {}", e))??;
+    let llm = llm_engine.inner().lock().await;
+    let raw_title = llm.generate_response(&title_prompt).await
+        .map_err(|e| AuraError::Llm(e))?;
 
     // Clean up the title (remove quotes, trim, limit length)
     let clean_title = raw_title
@@ -235,17 +211,17 @@ async fn generate_conversation_title(
 // Settings Commands
 
 #[tauri::command]
-fn load_settings(db: State<'_, DatabaseState>) -> Result<Settings, String> {
+async fn load_settings(db: State<'_, DatabaseState>) -> Result<Settings, AuraError> {
     log::info!("Tauri command: load_settings called");
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
+    let db = db.inner().lock().await;
 
     db.load_settings()
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-fn save_settings(
+async fn save_settings(
     llm_provider: String,
     server_address: String,
     wake_word_enabled: bool,
@@ -255,12 +231,11 @@ fn save_settings(
     vad_timeout_ms: u32,
     stt_model_name: String,
     db: State<'_, DatabaseState>
-) -> Result<(), String> {
+) -> Result<(), AuraError> {
     log::info!("Tauri command: save_settings called (provider: {}, server: {}, wake_word: {}, api_base_url: {}, model: {}, vad_sensitivity: {}, vad_timeout_ms: {}, stt_model: {})",
                llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name);
 
-    let db = db.inner().lock()
-        .map_err(|e| format!("Failed to lock database: {}", e))?;
+    let db = db.inner().lock().await;
 
     let settings = Settings {
         llm_provider,
@@ -274,45 +249,53 @@ fn save_settings(
     };
 
     db.save_settings(&settings)
+        .map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-fn save_api_key(api_key: String) -> Result<(), String> {
+async fn save_api_key(api_key: String) -> Result<(), AuraError> {
     log::info!("Tauri command: save_api_key called");
 
     secrets::save_api_key(&api_key)
+        .map_err(|e| AuraError::Secrets(e))
 }
 
 #[tauri::command]
-fn load_api_key() -> Result<String, String> {
+async fn load_api_key() -> Result<String, AuraError> {
     log::info!("Tauri command: load_api_key called");
 
     secrets::load_api_key()
+        .map_err(|e| AuraError::Secrets(e))
 }
 
 #[tauri::command]
-fn update_vad_settings(
+async fn update_vad_settings(
     sensitivity: f32,
     timeout_ms: u32,
-    voice_pipeline: State<'_, Arc<Mutex<NativeVoicePipeline>>>
-) -> Result<(), String> {
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>
+) -> Result<(), AuraError> {
     log::info!("Tauri command: update_vad_settings called (sensitivity: {}, timeout_ms: {})", sensitivity, timeout_ms);
 
-    let voice_pipeline = voice_pipeline.inner().lock()
-        .map_err(|e| format!("Failed to lock voice pipeline: {}", e))?;
+    let voice_pipeline_clone = voice_pipeline.inner().clone();
 
-    voice_pipeline.update_vad_settings(sensitivity, timeout_ms)
+    tokio::task::spawn_blocking(move || {
+        let pipeline = voice_pipeline_clone.lock()
+            .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
+
+        pipeline.update_vad_settings(sensitivity, timeout_ms)
+            .map_err(|e| AuraError::VoicePipeline(e))
+    }).await
+    .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
+
+    Ok(())
 }
 
 #[tauri::command]
-fn set_voice_state(
+async fn set_voice_state(
     state: String,
-    voice_pipeline: State<'_, Arc<Mutex<NativeVoicePipeline>>>
-) -> Result<(), String> {
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>
+) -> Result<(), AuraError> {
     log::info!("Tauri command: set_voice_state called (state: {})", state);
-
-    let voice_pipeline = voice_pipeline.inner().lock()
-        .map_err(|e| format!("Failed to lock voice pipeline: {}", e))?;
 
     // Parse state string to VoiceState enum
     use native_voice::VoiceState;
@@ -321,10 +304,21 @@ fn set_voice_state(
         "listening_for_wake_word" => VoiceState::ListeningForWakeWord,
         "transcribing" => VoiceState::Transcribing,
         "speaking" => VoiceState::Speaking,
-        _ => return Err(format!("Invalid voice state: {}. Must be one of: idle, listening_for_wake_word, transcribing, speaking", state)),
+        _ => return Err(AuraError::Config(format!("Invalid voice state: {}. Must be one of: idle, listening_for_wake_word, transcribing, speaking", state))),
     };
 
-    voice_pipeline.set_state(voice_state)
+    let voice_pipeline_clone = voice_pipeline.inner().clone();
+
+    tokio::task::spawn_blocking(move || {
+        let pipeline = voice_pipeline_clone.lock()
+            .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
+
+        pipeline.set_state(voice_state)
+            .map_err(|e| AuraError::VoicePipeline(e))
+    }).await
+    .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
+
+    Ok(())
 }
 
 /// Check if the configured STT model is present
@@ -401,9 +395,9 @@ async fn reload_voice_pipeline(
     vad_sensitivity: f32,
     vad_timeout_ms: u32,
     stt_model_name: String,
-    voice_pipeline: State<'_, Arc<Mutex<NativeVoicePipeline>>>,
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>,
     database: State<'_, DatabaseState>,
-) -> Result<(), String> {
+) -> Result<(), AuraError> {
     log::info!("Reloading voice pipeline with new settings...");
     log::info!("  STT model: {}", stt_model_name);
     log::info!("  VAD sensitivity: {}", vad_sensitivity);
@@ -423,8 +417,9 @@ async fn reload_voice_pipeline(
             stt_model_name: stt_model_name.clone(),
         };
 
-        let db = database.lock().map_err(|e| format!("Failed to lock database: {}", e))?;
-        db.save_settings(&settings_to_save)?;
+        let db = database.lock().await;
+        db.save_settings(&settings_to_save)
+            .map_err(|e| AuraError::Database(e))?;
     }
 
     // Determine model path
@@ -432,12 +427,13 @@ async fn reload_voice_pipeline(
         .map(|p| p.join("nivora-aura").join("models"))
         .unwrap_or_else(|| std::path::PathBuf::from("./models"));
 
-    // Stop the old pipeline and create a new one
-    let new_pipeline = {
+    let voice_pipeline_clone = voice_pipeline.inner().clone();
+
+    // Stop the old pipeline and create a new one using spawn_blocking
+    let new_pipeline = tokio::task::spawn_blocking(move || {
         // First, stop the old pipeline
-        let old_pipeline = voice_pipeline
-            .lock()
-            .map_err(|e| format!("Failed to lock voice pipeline: {}", e))?;
+        let old_pipeline = voice_pipeline_clone.lock()
+            .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
         log::info!("Stopping current voice pipeline...");
         old_pipeline.stop();
@@ -447,26 +443,33 @@ async fn reload_voice_pipeline(
 
         // Create new pipeline with updated settings
         log::info!("Creating new voice pipeline...");
-        NativeVoicePipeline::new(
+        let pipeline = NativeVoicePipeline::new(
             app_handle.clone(),
             model_path.clone(),
             stt_model_name.clone(),
             vad_sensitivity,
             vad_timeout_ms,
-        )?
-    };
+        )
+        .map_err(|e| AuraError::VoicePipeline(e))?;
 
-    // Start the new pipeline
-    log::info!("Starting new voice pipeline...");
-    new_pipeline.start()?;
+        // Start the new pipeline
+        log::info!("Starting new voice pipeline...");
+        pipeline.start()
+            .map_err(|e| AuraError::VoicePipeline(e))?;
+
+        Ok::<_, AuraError>(pipeline)
+    }).await
+    .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     // Replace the old pipeline with the new one
-    {
-        let mut pipeline = voice_pipeline
-            .lock()
-            .map_err(|e| format!("Failed to lock voice pipeline for replacement: {}", e))?;
+    let voice_pipeline_clone2 = voice_pipeline.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let mut pipeline = voice_pipeline_clone2.lock()
+            .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
         *pipeline = new_pipeline;
-    }
+        Ok::<_, AuraError>(())
+    }).await
+    .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     log::info!("✓ Voice pipeline reloaded successfully");
     Ok(())
@@ -489,7 +492,7 @@ pub fn run() {
                     let msg_count = db.count_messages().unwrap_or(0);
                     log::info!("✓ Database initialized successfully");
                     log::info!("  - {} conversations, {} messages", conv_count, msg_count);
-                    Arc::new(Mutex::new(db))
+                    Arc::new(TokioMutex::new(db))
                 }
                 Err(e) => {
                     log::error!("✗ Failed to initialize database: {}", e);
@@ -507,7 +510,7 @@ pub fn run() {
     log::info!("Loading LLM engine configuration...");
 
     // Load settings to get API configuration
-    let db_for_llm = database.lock().unwrap();
+    let db_for_llm = database.blocking_lock();
     let settings = db_for_llm.load_settings().unwrap_or_else(|e| {
         log::warn!("Failed to load settings, using defaults: {}", e);
         Settings {
@@ -539,7 +542,7 @@ pub fn run() {
             log::info!("  - Model: {}", info.model_name);
             log::info!("  - System prompt: {}", info.system_prompt);
             log::info!("  - API Key: {}", if api_key.is_some() { "provided" } else { "not provided" });
-            Arc::new(Mutex::new(llm))
+            Arc::new(TokioMutex::new(llm))
         }
         Err(e) => {
             log::error!("✗ Failed to initialize LLM engine: {}", e);
@@ -595,7 +598,7 @@ pub fn run() {
             log::info!("  - Piper binary: {:?}", piper_binary);
             log::info!("  - Voice model: {:?}", voice_model_path);
             log::info!("  - Using stable subprocess architecture");
-            Arc::new(Mutex::new(tts))
+            Arc::new(TokioMutex::new(tts))
         }
         Err(e) => {
             log::error!("✗ Failed to initialize subprocess-based Piper TTS engine: {}", e);
@@ -654,7 +657,7 @@ pub fn run() {
 
             // Load settings again for voice pipeline configuration
             let vad_settings = {
-                let db = database_for_setup.lock().unwrap();
+                let db = database_for_setup.blocking_lock();
                 db.load_settings().ok()
             };
 
@@ -688,7 +691,7 @@ pub fn run() {
                         log::warn!("  Place it in: {:?}", model_path);
                     }
 
-                    Arc::new(Mutex::new(pipeline))
+                    Arc::new(StdMutex::new(pipeline))
                 }
                 Err(e) => {
                     log::error!("✗ Failed to initialize voice pipeline: {}", e);
@@ -703,7 +706,7 @@ pub fn run() {
             // Start voice pipeline
             log::info!("Starting voice pipeline...");
             {
-                let pipeline = voice_pipeline.lock().unwrap();
+                let pipeline = voice_pipeline.lock().expect("Failed to lock voice pipeline");
                 if let Err(e) = pipeline.start() {
                     log::error!("Failed to start voice pipeline: {}", e);
                 } else {
@@ -722,7 +725,7 @@ pub fn run() {
                 loop {
                     // Load current settings to get API base URL and STT model name
                     let (api_base_url, stt_model_name) = {
-                        let db = database_for_status.lock().unwrap();
+                        let db = database_for_status.blocking_lock();
                         if let Ok(settings) = db.load_settings() {
                             (settings.api_base_url, settings.stt_model_name)
                         } else {

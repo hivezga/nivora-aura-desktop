@@ -10,6 +10,7 @@ import {
   parseISO
 } from "date-fns";
 import SystemStatusIndicator from "./SystemStatusIndicator";
+import { showErrorToast } from "../utils/errorHandler";
 
 const Sidebar: React.FC = () => {
   const conversations = useChatStore((state) => state.conversations);
@@ -52,7 +53,7 @@ const Sidebar: React.FC = () => {
       // For older dates, return a nice formatted date
       return format(date, "MMM d, yyyy");
     } catch (error) {
-      console.error("Error formatting date:", error);
+      showErrorToast(error, "Error formatting date");
       return new Date(dateString).toLocaleDateString();
     }
   };
@@ -79,7 +80,7 @@ const Sidebar: React.FC = () => {
         console.log("Created new conversation:", newId);
       }
     } catch (error) {
-      console.error("Failed to create new conversation:", error);
+      showErrorToast(error, "Failed to create new conversation");
     }
   };
 
@@ -105,7 +106,7 @@ const Sidebar: React.FC = () => {
 
       console.log(`Loaded ${messages.length} messages for conversation ${conversationId}`);
     } catch (error) {
-      console.error("Failed to load conversation:", error);
+      showErrorToast(error, "Failed to load conversation");
     }
   };
 
@@ -131,7 +132,7 @@ const Sidebar: React.FC = () => {
 
       console.log(`Deleted conversation ${conversationId}`);
     } catch (error) {
-      console.error("Failed to delete conversation:", error);
+      showErrorToast(error, "Failed to delete conversation");
     }
   };
 

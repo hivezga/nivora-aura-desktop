@@ -29,6 +29,7 @@ const CHUNK_SIZE: usize = 512;   // Process in small chunks for responsiveness
 const VOICE_FRAMES_REQUIRED: usize = 10;     // Require consistent voice energy for wake word
 const MAX_RECORDING_SECONDS: usize = 30;     // Maximum 30 seconds per transcription
 const SKIP_FRAMES_AFTER_WAKE_WORD: usize = 15; // Skip ~500ms of audio after wake word to prevent capturing it
+const MIN_RECORDING_FRAMES: usize = 30;      // Minimum 30 frames (~1 second) before allowing silence detection
 
 /// Voice pipeline state machine
 ///
@@ -201,12 +202,14 @@ impl NativeVoicePipeline {
         // Recording state (only used when IS recording)
         let silence_frame_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let has_detected_speech = Arc::new(AtomicBool::new(false));
+        let recording_frame_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
         // Clone for audio callback
         let voice_frame_count_clone = voice_frame_count.clone();
         let last_wake_emission_clone = last_wake_emission.clone();
         let silence_frame_count_clone = silence_frame_count.clone();
         let has_detected_speech_clone = has_detected_speech.clone();
+        let recording_frame_count_clone = recording_frame_count.clone();
         let state_clone = state.clone();
         let recording_buffer_clone = recording_buffer.clone();
         let recording_complete_clone = recording_complete.clone();
@@ -262,6 +265,9 @@ impl NativeVoicePipeline {
                                 return; // Discard this frame
                             }
 
+                            // Increment recording frame counter
+                            let frame_count = recording_frame_count_clone.fetch_add(1, Ordering::Relaxed) + 1;
+
                             // Add all samples to recording buffer
                             if let Ok(mut buffer) = recording_buffer_clone.lock() {
                                 buffer.extend_from_slice(data);
@@ -270,21 +276,31 @@ impl NativeVoicePipeline {
                             // VAD: Detect speech start and end
                             if energy > sensitivity {
                                 // Voice detected
-                                has_detected_speech_clone.store(true, Ordering::Relaxed);
+                                let was_speech = has_detected_speech_clone.swap(true, Ordering::Relaxed);
                                 silence_frame_count_clone.store(0, Ordering::Relaxed);
+
+                                // Log first speech detection
+                                if !was_speech {
+                                    debug!("Speech detected! (energy: {:.4} > threshold: {:.4})", energy, sensitivity);
+                                }
                             } else {
                                 // Silence detected
                                 if has_detected_speech_clone.load(Ordering::Relaxed) {
-                                    let silence_count = silence_frame_count_clone.fetch_add(1, Ordering::Relaxed) + 1;
+                                    // Only allow silence detection after minimum recording duration
+                                    if frame_count >= MIN_RECORDING_FRAMES {
+                                        let silence_count = silence_frame_count_clone.fetch_add(1, Ordering::Relaxed) + 1;
 
-                                    // Check if we've had enough silence to end recording
-                                    if silence_count >= silence_frames {
-                                        debug!("Silence detected after speech - ending recording");
-                                        recording_complete_clone.store(true, Ordering::Relaxed);
+                                        // Check if we've had enough silence to end recording
+                                        if silence_count >= silence_frames {
+                                            debug!("Silence detected after speech - ending recording (frames: {}, silence_frames: {})",
+                                                   frame_count, silence_count);
+                                            recording_complete_clone.store(true, Ordering::Relaxed);
 
-                                        // Reset recording state for next time
-                                        has_detected_speech_clone.store(false, Ordering::Relaxed);
-                                        silence_frame_count_clone.store(0, Ordering::Relaxed);
+                                            // Reset recording state for next time
+                                            has_detected_speech_clone.store(false, Ordering::Relaxed);
+                                            silence_frame_count_clone.store(0, Ordering::Relaxed);
+                                            recording_frame_count_clone.store(0, Ordering::Relaxed);
+                                        }
                                     }
                                 }
                             }
@@ -416,7 +432,14 @@ impl NativeVoicePipeline {
 
         // Set skip counter to discard initial frames and prevent wake word capture
         self.skip_frames_counter.store(SKIP_FRAMES_AFTER_WAKE_WORD, Ordering::Relaxed);
-        debug!("Skipping {} frames to prevent wake word capture", SKIP_FRAMES_AFTER_WAKE_WORD);
+        info!("Recording started - speak now...");
+        debug!(
+            "Recording config: skip_frames={}, min_frames={}, vad_sensitivity={:.4}, vad_timeout_ms={}",
+            SKIP_FRAMES_AFTER_WAKE_WORD,
+            MIN_RECORDING_FRAMES,
+            *self.vad_sensitivity.lock().unwrap(),
+            *self.vad_timeout_ms.lock().unwrap()
+        );
 
         // Wait for recording to complete (VAD detects end of speech) or timeout
         let start_time = std::time::Instant::now();
@@ -453,16 +476,17 @@ impl NativeVoicePipeline {
             buffer.clone()
         };
 
-        debug!(
-            "Captured {} samples ({:.1}s of audio)",
+        let duration_seconds = recording_samples.len() as f32 / SAMPLE_RATE as f32;
+        info!(
+            "Captured {} samples ({:.2}s of audio)",
             recording_samples.len(),
-            recording_samples.len() as f32 / SAMPLE_RATE as f32
+            duration_seconds
         );
 
         // Check if we got any audio
         if recording_samples.is_empty() {
             // Cleanup before returning error
-            info!("No audio captured - cleaning up before returning error");
+            warn!("No audio captured - microphone may not be working or lacks permissions");
             {
                 let mut buffer = self.recording_buffer.lock().unwrap();
                 buffer.clear();
@@ -471,8 +495,27 @@ impl NativeVoicePipeline {
             self.voice_detected.store(false, Ordering::Relaxed);
             self.skip_frames_counter.store(0, Ordering::Relaxed);
 
-            return Err("No audio captured - recording buffer is empty".to_string());
+            return Err("No audio captured. Please check:\n1. Microphone permissions\n2. Microphone is connected and working\n3. Correct input device is selected".to_string());
         }
+
+        // Check if recording is too short to be useful
+        if duration_seconds < 0.5 {
+            warn!(
+                "Recording too short ({:.2}s) - likely no speech detected. Consider adjusting VAD sensitivity.",
+                duration_seconds
+            );
+            // Continue anyway in case there's actual speech
+        }
+
+        // Calculate average energy to diagnose audio issues
+        let avg_energy = calculate_rms_energy(&recording_samples);
+        let vad_sens = self.vad_sensitivity.lock().unwrap();
+        debug!(
+            "Audio analysis: avg_energy={:.4}, vad_threshold={:.4}, ratio={:.2}x",
+            avg_energy,
+            *vad_sens,
+            avg_energy / *vad_sens
+        );
 
         // Transcribe using whisper-rs (with automatic cleanup via defer-like pattern)
         let transcription_result = self.transcribe_with_whisper(&recording_samples, &whisper_model);

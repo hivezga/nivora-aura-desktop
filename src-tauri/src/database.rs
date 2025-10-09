@@ -1,7 +1,8 @@
 use rusqlite::{Connection, Result as SqlResult, params};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Represents a conversation in the database
 #[derive(Debug, Clone, Serialize, Deserialize)]

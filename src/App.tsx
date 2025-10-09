@@ -5,6 +5,7 @@ import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsModal from "./components/SettingsModal";
 import { useChatStore } from "./store";
+import { showErrorToast } from "./utils/errorHandler";
 
 function App() {
   const setAppStatus = useChatStore((state) => state.setAppStatus);
@@ -26,14 +27,14 @@ function App() {
         setConversations(conversations);
         console.log(`Loaded ${conversations.length} conversations`);
       } catch (error) {
-        console.error("Failed to load conversations:", error);
+        showErrorToast(error, "Failed to load conversations");
         // Non-fatal: app continues to function even if conversations don't load
       }
     };
 
     // Wrap in try-catch to prevent any uncaught promise rejections
     loadConversations().catch((err) => {
-      console.error("Uncaught error in loadConversations:", err);
+      showErrorToast(err, "Uncaught error in loadConversations");
     });
   }, [setConversations]);
 
@@ -67,14 +68,14 @@ function App() {
 
         console.log("Settings loaded successfully");
       } catch (error) {
-        console.error("Failed to load settings:", error);
+        showErrorToast(error, "Failed to load settings");
         // Non-fatal: app uses default settings if load fails
       }
     };
 
     // Wrap in try-catch to prevent any uncaught promise rejections
     loadSettings().catch((err) => {
-      console.error("Uncaught error in loadSettings:", err);
+      showErrorToast(err, "Uncaught error in loadSettings");
     });
   }, [setSettings]);
 
@@ -93,12 +94,12 @@ function App() {
         }
         // Note: "listening" and "processing" states maintain current voice state
       } catch (error) {
-        console.error("Failed to sync voice state:", error);
+        showErrorToast(error, "Failed to sync voice state");
       }
     };
 
     syncVoiceState().catch((err) => {
-      console.error("Uncaught error in syncVoiceState:", err);
+      showErrorToast(err, "Uncaught error in syncVoiceState");
     });
   }, [appStatus]);
 
@@ -120,7 +121,7 @@ function App() {
           conversationId = await invoke<number>("create_new_conversation");
           console.log("Created new conversation:", conversationId);
         } catch (error) {
-          console.error("Failed to create conversation:", error);
+          showErrorToast(error, "Failed to create conversation");
           return;
         }
       }
@@ -184,7 +185,7 @@ function App() {
 
               console.log(`Updated conversation title to: ${generatedTitle}`);
             } catch (titleError) {
-              console.error("Failed to generate/update title:", titleError);
+              showErrorToast(titleError, "Failed to generate/update title");
               // Non-fatal error - conversation still works
             }
           }
@@ -197,7 +198,7 @@ function App() {
               await invoke("speak_text", { text: response });
               console.log("Finished speaking");
             } catch (speakError) {
-              console.error("Failed to speak response:", speakError);
+              showErrorToast(speakError, "Failed to speak response");
               // Non-fatal error - response is still shown in UI
             }
           }
@@ -205,7 +206,7 @@ function App() {
           console.warn("Empty transcription received");
         }
       } catch (error) {
-        console.error("Error during STT or prompt handling:", error);
+        showErrorToast(error, "Error during STT or prompt handling");
         const errorMsg = "Sorry, I couldn't understand that. Please try again.";
 
         // Save error message if we have a conversation
@@ -217,7 +218,7 @@ function App() {
               content: errorMsg,
             });
           } catch (saveError) {
-            console.error("Failed to save error message:", saveError);
+            showErrorToast(saveError, "Failed to save error message");
           }
         }
 
@@ -232,7 +233,7 @@ function App() {
             setAppStatus("speaking");
             await invoke("speak_text", { text: errorMsg });
           } catch (speakError) {
-            console.error("Failed to speak error message:", speakError);
+            showErrorToast(speakError, "Failed to speak error message");
           }
         }
       } finally {

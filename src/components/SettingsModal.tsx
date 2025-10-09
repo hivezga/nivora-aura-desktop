@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { showErrorToast } from "../utils/errorHandler";
 
 const SettingsModal: React.FC = () => {
   const isOpen = useChatStore((state) => state.isSettingsOpen);
@@ -92,7 +93,7 @@ const SettingsModal: React.FC = () => {
 
       closeSettings();
     } catch (error) {
-      console.error("Failed to save settings:", error);
+      showErrorToast(error, "Failed to save settings");
       alert(`Failed to save settings: ${error}`);
     } finally {
       setIsSaving(false);

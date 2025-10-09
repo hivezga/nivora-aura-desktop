@@ -43,3 +43,6 @@ cpal = "0.15"  # Cross-platform audio I/O
 rodio = "0.17"  # Audio playback
 hound = "3.5"  # WAV file handling for in-memory audio conversion
 
+# Error handling
+thiserror = "1.0"  # Custom error types with derived Error trait
+

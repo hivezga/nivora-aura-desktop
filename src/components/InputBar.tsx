@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatStore } from "../store";
 import { Mic } from "lucide-react";
+import { showErrorToast } from "../utils/errorHandler";
 
 const InputBar: React.FC = () => {
   const [input, setInput] = useState("");
@@ -38,7 +39,7 @@ const InputBar: React.FC = () => {
 
         console.log("Created new conversation:", conversationId);
       } catch (error) {
-        console.error("Failed to create conversation:", error);
+        showErrorToast(error, "Failed to create conversation");
         return;
       }
     }
@@ -102,12 +103,12 @@ const InputBar: React.FC = () => {
 
           console.log(`Updated conversation title to: ${generatedTitle}`);
         } catch (titleError) {
-          console.error("Failed to generate/update title:", titleError);
+          showErrorToast(titleError, "Failed to generate/update title");
           // Non-fatal error - conversation still works
         }
       }
     } catch (error) {
-      console.error("Error calling backend:", error);
+      showErrorToast(error, "Error calling backend");
 
       // Set status back to idle on error
       setAppStatus("idle");
@@ -123,7 +124,7 @@ const InputBar: React.FC = () => {
             content: errorMsg,
           });
         } catch (saveError) {
-          console.error("Failed to save error message:", saveError);
+          showErrorToast(saveError, "Failed to save error message");
         }
       }
 
@@ -140,7 +141,7 @@ const InputBar: React.FC = () => {
       await invoke("cancel_generation");
       console.log("Generation cancelled");
     } catch (error) {
-      console.error("Failed to cancel generation:", error);
+      showErrorToast(error, "Failed to cancel generation");
     }
   };
 
@@ -152,7 +153,7 @@ const InputBar: React.FC = () => {
         console.log("Recording cancelled");
         setAppStatus("idle");
       } catch (error) {
-        console.error("Failed to cancel recording:", error);
+        showErrorToast(error, "Failed to cancel recording");
         setAppStatus("idle");
       }
       return;
@@ -248,7 +249,7 @@ const InputBar: React.FC = () => {
         await invoke("speak_text", { text: response });
         console.log("Finished speaking");
       } catch (speakError) {
-        console.error("Failed to speak response:", speakError);
+        showErrorToast(speakError, "Failed to speak response");
         // Non-fatal error - response is still shown in UI
       } finally {
         setAppStatus("idle");
@@ -270,11 +271,11 @@ const InputBar: React.FC = () => {
 
           updateConversationTitle(conversationId, generatedTitle);
         } catch (titleError) {
-          console.error("Failed to generate title:", titleError);
+          showErrorToast(titleError, "Failed to generate title");
         }
       }
     } catch (error) {
-      console.error("Error with voice input:", error);
+      showErrorToast(error, "Error with voice input");
       setAppStatus("idle");
 
       const errorMsg = "Sorry, there was an error processing your voice input.";
