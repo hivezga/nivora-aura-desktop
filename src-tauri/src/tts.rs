@@ -125,16 +125,24 @@ impl TextToSpeech {
 
         // Spawn piper subprocess
         log::debug!("Spawning piper subprocess...");
-        let mut child = Command::new(&self.piper_path)
-            .arg("--model")
+
+        // Get directory containing piper binary for LD_LIBRARY_PATH
+        let piper_dir = self.piper_path.parent()
+            .ok_or("Failed to get piper binary directory")?;
+
+        // Set LD_LIBRARY_PATH to include the piper bin directory (contains .so files)
+        let mut cmd = Command::new(&self.piper_path);
+        cmd.arg("--model")
             .arg(&self.model_path)
             .arg("--output-raw")  // Output raw PCM instead of WAV
             .arg("--espeak_data")
             .arg(&self.espeak_data_path)
+            .env("LD_LIBRARY_PATH", piper_dir) // Add library path for bundled .so files
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+
+        let mut child = cmd.spawn()
             .map_err(|e| format!("Failed to spawn piper process: {}", e))?;
 
         // Write text to stdin

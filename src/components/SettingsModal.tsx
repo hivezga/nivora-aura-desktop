@@ -37,7 +37,32 @@ const SettingsModal: React.FC = () => {
   const [vadSensitivity, setVadSensitivity] = useState(settings.vad_sensitivity);
   const [vadTimeoutMs, setVadTimeoutMs] = useState(settings.vad_timeout_ms);
   const [sttModelName, setSttModelName] = useState(settings.stt_model_name);
+  const [voicePreference, setVoicePreference] = useState(settings.voice_preference);
   const [isSaving, setIsSaving] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+
+  // Fetch available models when modal opens
+  useEffect(() => {
+    const fetchModels = async () => {
+      if (!isOpen) return;
+
+      setIsLoadingModels(true);
+      try {
+        const models = await invoke<string[]>("fetch_available_models");
+        setAvailableModels(models);
+        console.log("Fetched available models:", models);
+      } catch (error) {
+        console.error("Failed to fetch models:", error);
+        // Fallback to current model if fetch fails
+        setAvailableModels([settings.model_name]);
+      } finally {
+        setIsLoadingModels(false);
+      }
+    };
+
+    fetchModels();
+  }, [isOpen, settings.model_name]);
 
   // Update local state when settings change
   useEffect(() => {
@@ -50,6 +75,7 @@ const SettingsModal: React.FC = () => {
     setVadSensitivity(settings.vad_sensitivity);
     setVadTimeoutMs(settings.vad_timeout_ms);
     setSttModelName(settings.stt_model_name);
+    setVoicePreference(settings.voice_preference);
   }, [settings]);
 
   const handleSave = async () => {
@@ -62,8 +88,20 @@ const SettingsModal: React.FC = () => {
         });
       }
 
-      // Reload voice pipeline with new settings (saves to DB + restarts pipeline)
-      // This enables live model switching without app restart
+      // Save all settings to database (including voice preference)
+      await invoke("save_settings", {
+        llmProvider,
+        serverAddress,
+        wakeWordEnabled,
+        apiBaseUrl,
+        modelName,
+        vadSensitivity,
+        vadTimeoutMs,
+        sttModelName,
+        voicePreference,
+      });
+
+      // Reload voice pipeline with new settings (restarts pipeline with new VAD/STT settings)
       await invoke("reload_voice_pipeline", {
         llmProvider,
         serverAddress,
@@ -86,6 +124,7 @@ const SettingsModal: React.FC = () => {
         vad_sensitivity: vadSensitivity,
         vad_timeout_ms: vadTimeoutMs,
         stt_model_name: sttModelName,
+        voice_preference: voicePreference,
       });
 
       console.log("Settings saved and voice pipeline reloaded successfully");
@@ -112,6 +151,7 @@ const SettingsModal: React.FC = () => {
       setVadSensitivity(settings.vad_sensitivity);
       setVadTimeoutMs(settings.vad_timeout_ms);
       setSttModelName(settings.stt_model_name);
+      setVoicePreference(settings.voice_preference);
       closeSettings();
     }
   };
@@ -197,18 +237,40 @@ const SettingsModal: React.FC = () => {
           {/* Model Name */}
           <div className="space-y-2">
             <Label htmlFor="model-name" className="text-gray-300">
-              Model Name
+              Model Selection
             </Label>
-            <Input
-              type="text"
-              id="model-name"
-              value={modelName}
-              onChange={(e) => setModelName(e.target.value)}
-              placeholder="e.g., llama3, phi3:instruct"
-              className="bg-gray-800 text-gray-100 border-gray-700 focus:ring-gray-600 placeholder-gray-500"
-            />
+            <Select value={modelName} onValueChange={setModelName} disabled={isLoadingModels}>
+              <SelectTrigger
+                id="model-name"
+                className="w-full bg-gray-800 text-gray-100 border-gray-700 focus:ring-gray-600"
+              >
+                <SelectValue placeholder={isLoadingModels ? "Loading models..." : "Select a model"} />
+              </SelectTrigger>
+              <SelectContent className="bg-gray-800 border-gray-700">
+                {availableModels.length > 0 ? (
+                  availableModels.map((model) => (
+                    <SelectItem
+                      key={model}
+                      value={model}
+                      className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                    >
+                      {model}
+                    </SelectItem>
+                  ))
+                ) : (
+                  <SelectItem
+                    value={modelName}
+                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                  >
+                    {modelName}
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
             <p className="text-xs text-gray-500">
-              The model identifier to use (must be available in your AI server)
+              {availableModels.length > 0
+                ? `${availableModels.length} model(s) available on your system`
+                : "Select from locally available models"}
             </p>
           </div>
 
@@ -319,6 +381,38 @@ const SettingsModal: React.FC = () => {
               </Select>
               <p className="text-xs text-gray-500">
                 Download your chosen model and place it in the models directory. Restart required after changing.
+              </p>
+            </div>
+
+            {/* TTS Voice Selection */}
+            <div className="space-y-2">
+              <Label htmlFor="voice-preference" className="text-gray-300">
+                Voice Preference
+              </Label>
+              <Select value={voicePreference} onValueChange={setVoicePreference}>
+                <SelectTrigger
+                  id="voice-preference"
+                  className="w-full bg-gray-800 text-gray-100 border-gray-700 focus:ring-gray-600"
+                >
+                  <SelectValue placeholder="Select voice" />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-800 border-gray-700">
+                  <SelectItem
+                    value="male"
+                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                  >
+                    Male Voice (Lessac)
+                  </SelectItem>
+                  <SelectItem
+                    value="female"
+                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                  >
+                    Female Voice (Amy)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500">
+                Select the voice for text-to-speech output. Changes apply after clicking Apply.
               </p>
             </div>
 

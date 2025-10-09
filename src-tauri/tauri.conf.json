@@ -46,7 +46,12 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "models/*"
+      "models/*",
+      "../resources/piper/bin/*",
+      "../resources/piper/voices/*",
+      "../resources/piper/espeak-ng-data",
+      "../resources/ollama/bin/*",
+      "../resources/ollama/models"
     ]
   }
 }

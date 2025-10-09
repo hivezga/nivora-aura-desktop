@@ -23,6 +23,7 @@ export interface Settings {
   vad_sensitivity: number;      // Voice activity detection sensitivity (0.001-1.0)
   vad_timeout_ms: number;       // Silence timeout in milliseconds (100-10000)
   stt_model_name: string;       // STT (Whisper) model filename (e.g., "ggml-base.en.bin")
+  voice_preference: string;     // TTS voice preference ("male" or "female")
 }
 
 export type AppStatus = "idle" | "listening" | "processing" | "speaking";
@@ -116,6 +117,7 @@ export const useChatStore = create<ChatStore>((set) => ({
     vad_sensitivity: 0.02,
     vad_timeout_ms: 1280,
     stt_model_name: "ggml-base.en.bin",
+    voice_preference: "male",
   },
   setSettings: (settings) => set({ settings }),
   isSettingsOpen: false,

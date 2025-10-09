@@ -1,13 +1,16 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
 import SettingsModal from "./components/SettingsModal";
+import WelcomeWizard from "./components/WelcomeWizard";
 import { useChatStore } from "./store";
 import { showErrorToast } from "./utils/errorHandler";
 
 function App() {
+  const [showWizard, setShowWizard] = useState<boolean | null>(null);
+
   const setAppStatus = useChatStore((state) => state.setAppStatus);
   const appStatus = useChatStore((state) => state.appStatus);
   const addMessage = useChatStore((state) => state.addMessage);
@@ -18,6 +21,25 @@ function App() {
   const setSettings = useChatStore((state) => state.setSettings);
   const lastInputMethod = useChatStore((state) => state.lastInputMethod);
   const setLastInputMethod = useChatStore((state) => state.setLastInputMethod);
+
+  // Check if first-run wizard should be shown
+  useEffect(() => {
+    const checkFirstRun = async () => {
+      try {
+        interface SetupStatus {
+          first_run_complete: boolean;
+        }
+        const status = await invoke<SetupStatus>("check_setup_status");
+        setShowWizard(!status.first_run_complete);
+      } catch (error) {
+        console.error("Failed to check first-run status:", error);
+        // On error, default to not showing wizard to prevent blocking app
+        setShowWizard(false);
+      }
+    };
+
+    checkFirstRun();
+  }, []);
 
   // Load conversations on app startup
   useEffect(() => {
@@ -63,7 +85,8 @@ function App() {
           model_name: dbSettings.model_name,
           vad_sensitivity: dbSettings.vad_sensitivity ?? 0.02,
           vad_timeout_ms: dbSettings.vad_timeout_ms ?? 1280,
-          stt_model_name: dbSettings.stt_model_name ?? "ggml-base.en.bin",
+          stt_model_name: dbSettings.stt_model_name ?? "ggml-tiny.bin",
+          voice_preference: dbSettings.voice_preference ?? "male",
         });
 
         console.log("Settings loaded successfully");
@@ -250,8 +273,20 @@ function App() {
     };
   }, [setAppStatus, addMessage, activeConversationId, conversations, updateConversationTitle, lastInputMethod, setLastInputMethod]);
 
+  // Show loading state while checking first-run status
+  if (showWizard === null) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-gray-950">
+        <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-purple-500"></div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-gray-950">
+      {showWizard && (
+        <WelcomeWizard onComplete={() => setShowWizard(false)} />
+      )}
       <Sidebar />
       <ChatView />
       <SettingsModal />

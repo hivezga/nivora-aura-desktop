@@ -46,3 +46,10 @@ hound = "3.5"  # WAV file handling for in-memory audio conversion
 # Error handling
 thiserror = "1.0"  # Custom error types with derived Error trait
 
+# First-run wizard utilities
+which = "6.0"  # Check if executables exist in PATH
+
+# Ollama sidecar process management
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }  # Unix signal handling for graceful Ollama shutdown
+

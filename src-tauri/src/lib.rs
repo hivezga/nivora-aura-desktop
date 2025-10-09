@@ -4,10 +4,12 @@ mod llm;
 mod database;
 mod secrets;
 mod error;
+mod ollama_sidecar;
 
 use native_voice::NativeVoicePipeline;
 use tts::TextToSpeech;
 use llm::LLMEngine;
+use ollama_sidecar::OllamaSidecar;
 use database::{Database, DatabaseState, Conversation, Message, Settings, get_database_path};
 use error::AuraError;
 use std::sync::Arc;
@@ -230,10 +232,11 @@ async fn save_settings(
     vad_sensitivity: f32,
     vad_timeout_ms: u32,
     stt_model_name: String,
+    voice_preference: String,
     db: State<'_, DatabaseState>
 ) -> Result<(), AuraError> {
-    log::info!("Tauri command: save_settings called (provider: {}, server: {}, wake_word: {}, api_base_url: {}, model: {}, vad_sensitivity: {}, vad_timeout_ms: {}, stt_model: {})",
-               llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name);
+    log::info!("Tauri command: save_settings called (provider: {}, server: {}, wake_word: {}, api_base_url: {}, model: {}, vad_sensitivity: {}, vad_timeout_ms: {}, stt_model: {}, voice: {})",
+               llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference);
 
     let db = db.inner().lock().await;
 
@@ -246,6 +249,7 @@ async fn save_settings(
         vad_sensitivity,
         vad_timeout_ms,
         stt_model_name,
+        voice_preference,
     };
 
     db.save_settings(&settings)
@@ -406,6 +410,14 @@ async fn reload_voice_pipeline(
 
     // Save settings to database first
     {
+        let db = database.lock().await;
+
+        // Load existing voice preference (this command doesn't modify it)
+        let existing_voice_preference = db.load_settings()
+            .ok()
+            .map(|s| s.voice_preference)
+            .unwrap_or_else(|| "male".to_string());
+
         let settings_to_save = Settings {
             llm_provider: llm_provider.clone(),
             server_address: server_address.clone(),
@@ -415,9 +427,9 @@ async fn reload_voice_pipeline(
             vad_sensitivity,
             vad_timeout_ms,
             stt_model_name: stt_model_name.clone(),
+            voice_preference: existing_voice_preference,
         };
 
-        let db = database.lock().await;
         db.save_settings(&settings_to_save)
             .map_err(|e| AuraError::Database(e))?;
     }
@@ -475,6 +487,251 @@ async fn reload_voice_pipeline(
     Ok(())
 }
 
+// =============================================================================
+// FIRST-RUN WIZARD COMMANDS
+// =============================================================================
+
+/// Status of a dependency for the first-run wizard
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SetupStatus {
+    pub first_run_complete: bool,
+    pub whisper_model_exists: bool,
+    pub whisper_model_path: String,
+}
+
+/// Check the status of all required dependencies
+#[tauri::command]
+async fn check_setup_status(
+    database: State<'_, DatabaseState>,
+) -> Result<SetupStatus, AuraError> {
+    log::info!("Checking setup status for first-run wizard");
+
+    // Check if first-run wizard has been completed
+    let first_run_complete = {
+        let db = database.lock().await;
+        db.is_first_run_complete()
+            .map_err(|e| AuraError::Database(e))?
+    };
+
+    // Check Whisper model existence
+    let model_path = dirs::data_local_dir()
+        .map(|p| p.join("nivora-aura").join("models"))
+        .unwrap_or_else(|| std::path::PathBuf::from("./models"));
+
+    let whisper_model_path = model_path.join("ggml-tiny.bin");
+    let whisper_model_exists = whisper_model_path.exists();
+
+    let status = SetupStatus {
+        first_run_complete,
+        whisper_model_exists,
+        whisper_model_path: whisper_model_path.to_string_lossy().to_string(),
+    };
+
+    log::info!("Setup status: first_run={}, whisper={}",
+               status.first_run_complete, status.whisper_model_exists);
+
+    Ok(status)
+}
+
+/// Download progress event
+#[derive(Clone, serde::Serialize)]
+struct DownloadProgress {
+    downloaded_bytes: u64,
+    total_bytes: Option<u64>,
+    percentage: f32,
+}
+
+/// Download the Whisper tiny model from HuggingFace
+#[tauri::command]
+async fn download_whisper_model(
+    app_handle: tauri::AppHandle,
+) -> Result<String, AuraError> {
+    log::info!("Starting Whisper model download");
+
+    // Determine download path
+    let model_path = dirs::data_local_dir()
+        .map(|p| p.join("nivora-aura").join("models"))
+        .unwrap_or_else(|| std::path::PathBuf::from("./models"));
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&model_path)
+        .map_err(|e| AuraError::Internal(format!("Failed to create models directory: {}", e)))?;
+
+    let dest_path = model_path.join("ggml-tiny.bin");
+
+    // URL for ggml-tiny.bin from HuggingFace
+    let url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin";
+
+    // Download with progress
+    let client = reqwest::Client::new();
+    let mut response = client.get(url).send().await
+        .map_err(|e| AuraError::Internal(format!("Failed to start download: {}", e)))?;
+
+    let total_size = response.content_length();
+
+    let mut file = tokio::fs::File::create(&dest_path).await
+        .map_err(|e| AuraError::Internal(format!("Failed to create file: {}", e)))?;
+
+    let mut downloaded: u64 = 0;
+
+    while let Some(chunk) = response.chunk().await
+        .map_err(|e| AuraError::Internal(format!("Failed to download chunk: {}", e)))? {
+
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await
+            .map_err(|e| AuraError::Internal(format!("Failed to write chunk: {}", e)))?;
+
+        downloaded += chunk.len() as u64;
+
+        let percentage = if let Some(total) = total_size {
+            (downloaded as f32 / total as f32) * 100.0
+        } else {
+            0.0
+        };
+
+        // Emit progress event
+        let progress = DownloadProgress {
+            downloaded_bytes: downloaded,
+            total_bytes: total_size,
+            percentage,
+        };
+
+        app_handle.emit("download_progress", progress)
+            .map_err(|e| AuraError::Internal(format!("Failed to emit progress: {}", e)))?;
+    }
+
+    log::info!("✓ Whisper model downloaded successfully to: {}", dest_path.display());
+
+    Ok(dest_path.to_string_lossy().to_string())
+}
+
+/// Mark the first-run wizard as complete
+#[tauri::command]
+async fn mark_setup_complete(
+    database: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!("Marking first-run setup as complete");
+
+    let db = database.lock().await;
+    db.mark_first_run_complete()
+        .map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ First-run setup marked complete");
+
+    Ok(())
+}
+
+/// Fetch list of available Ollama models from the running server
+#[tauri::command]
+async fn fetch_available_models(db: State<'_, DatabaseState>) -> Result<Vec<String>, AuraError> {
+    log::info!("Tauri command: fetch_available_models called");
+
+    // Load settings to get API base URL
+    let settings = {
+        let db = db.inner().lock().await;
+        db.load_settings()
+            .map_err(|e| AuraError::Database(e))?
+    };
+
+    let api_url = format!("{}/tags", settings.api_base_url);
+    log::info!("Fetching models from: {}", api_url);
+
+    // Create HTTP client with timeout
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| AuraError::Internal(format!("Failed to create HTTP client: {}", e)))?;
+
+    // Fetch models list
+    let response = client
+        .get(&api_url)
+        .send()
+        .await
+        .map_err(|e| AuraError::Internal(format!("Failed to fetch models: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(AuraError::Internal(format!(
+            "Ollama API returned error status: {}",
+            response.status()
+        )));
+    }
+
+    // Parse response
+    #[derive(serde::Deserialize)]
+    struct TagsResponse {
+        models: Vec<ModelInfo>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct ModelInfo {
+        name: String,
+    }
+
+    let tags_response: TagsResponse = response
+        .json()
+        .await
+        .map_err(|e| AuraError::Internal(format!("Failed to parse models response: {}", e)))?;
+
+    // Extract model names
+    let mut model_names: Vec<String> = tags_response
+        .models
+        .into_iter()
+        .map(|m| m.name)
+        .collect();
+
+    // Always include bundled gemma:2b if not already in list
+    if !model_names.contains(&"gemma:2b".to_string()) {
+        model_names.push("gemma:2b".to_string());
+        log::info!("Added bundled gemma:2b to model list");
+    }
+
+    // Sort alphabetically for better UX
+    model_names.sort();
+
+    log::info!("✓ Found {} available models", model_names.len());
+
+    Ok(model_names)
+}
+
+/// Wait for Ollama server to become ready
+///
+/// Polls the Ollama API until it responds or times out
+async fn wait_for_ollama_ready(host: &str, timeout_secs: u64) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let api_url = format!("http://{}/api/tags", host);
+
+    log::info!("Waiting for Ollama API at: {}", api_url);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    loop {
+        if start.elapsed() > timeout {
+            return Err(format!(
+                "Ollama server did not become ready within {} seconds",
+                timeout_secs
+            ));
+        }
+
+        match client.get(&api_url).send().await {
+            Ok(response) if response.status().is_success() => {
+                log::info!("✓ Ollama server ready (took {:.1}s)", start.elapsed().as_secs_f32());
+                return Ok(());
+            }
+            Ok(response) => {
+                log::debug!("Ollama API returned: {}", response.status());
+            }
+            Err(e) => {
+                log::debug!("Ollama not ready yet: {}", e);
+            }
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger
@@ -518,10 +775,11 @@ pub fn run() {
             server_address: "".to_string(),
             wake_word_enabled: false,
             api_base_url: "http://localhost:11434/v1".to_string(),
-            model_name: "llama3".to_string(),
+            model_name: "gemma:2b".to_string(),
             vad_sensitivity: 0.02,
             vad_timeout_ms: 1280,
             stt_model_name: "ggml-base.en.bin".to_string(),
+            voice_preference: "male".to_string(),
         }
     });
     drop(db_for_llm); // Release the lock
@@ -552,61 +810,7 @@ pub fn run() {
         }
     };
 
-    // Initialize Subprocess-based Piper TTS engine
-    log::info!("Initializing subprocess-based Piper TTS engine...");
-
-    // Determine piper binary path
-    let piper_binary = std::env::var("PIPER_BINARY")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/usr/local/bin/piper"));
-
-    // Determine voice model path
-    let voice_model_path = dirs::data_local_dir()
-        .map(|p| p.join("nivora-aura").join("voices").join("en_US-lessac-medium.onnx"))
-        .unwrap_or_else(|| std::path::PathBuf::from("./voices/en_US-lessac-medium.onnx"));
-
-    // Determine espeak-ng data path
-    // Use absolute path to the project's piper directory
-    let espeak_data_path = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
-        .and_then(|exe_dir| {
-            // In dev mode, executable is in src-tauri/target/debug/
-            // Go up to project root: target/debug/ -> target/ -> src-tauri/ -> project_root/
-            exe_dir
-                .parent() // target/debug -> target
-                .and_then(|target| target.parent()) // target -> src-tauri
-                .and_then(|src_tauri| src_tauri.parent()) // src-tauri -> project_root
-                .map(|root| root.join("piper").join("espeak-ng-data"))
-        })
-        .unwrap_or_else(|| std::path::PathBuf::from("/storage/dev/aura-desktop/piper/espeak-ng-data"));
-
-    // Create voices directory if it doesn't exist
-    if let Some(parent) = voice_model_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            log::warn!("Failed to create voices directory: {}", e);
-        }
-    }
-
-    log::info!("Piper binary path: {:?}", piper_binary);
-    log::info!("Voice model path: {:?}", voice_model_path);
-    log::info!("eSpeak-NG data path: {:?}", espeak_data_path);
-
-    let tts_engine = match TextToSpeech::new(piper_binary.clone(), voice_model_path.clone(), espeak_data_path.clone()) {
-        Ok(tts) => {
-            log::info!("✓ Subprocess-based Piper TTS engine initialized successfully");
-            log::info!("  - Piper binary: {:?}", piper_binary);
-            log::info!("  - Voice model: {:?}", voice_model_path);
-            log::info!("  - Using stable subprocess architecture");
-            Arc::new(TokioMutex::new(tts))
-        }
-        Err(e) => {
-            log::error!("✗ Failed to initialize subprocess-based Piper TTS engine: {}", e);
-            log::error!("  Please install Piper TTS and download a voice model (.onnx file)");
-            log::error!("  See README.md for installation instructions");
-            panic!("Cannot start TTS engine. Error: {}", e);
-        }
-    };
+    // TTS will be initialized in setup closure after app handle is available
 
     log::info!("=== Starting Tauri Application ===");
 
@@ -617,7 +821,6 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(database.clone())
         .manage(llm_engine)
-        .manage(tts_engine)
         .invoke_handler(tauri::generate_handler![
             greet,
             handle_user_prompt,
@@ -638,7 +841,11 @@ pub fn run() {
             load_api_key,
             update_vad_settings,
             set_voice_state,
-            reload_voice_pipeline
+            reload_voice_pipeline,
+            check_setup_status,
+            download_whisper_model,
+            mark_setup_complete,
+            fetch_available_models
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -655,6 +862,112 @@ pub fn run() {
 
             log::info!("Model directory: {:?}", model_path);
 
+            // Initialize Ollama sidecar process (bundled LLM server)
+            log::info!("Initializing Ollama sidecar...");
+
+            // Try bundled Ollama first (production mode)
+            let resource_dir_for_ollama = app_handle.path().resource_dir()
+                .map_err(|e| format!("Failed to get resource directory: {}", e))
+                .unwrap();
+
+            // Determine platform-specific Ollama binary name
+            let ollama_binary_name = if cfg!(target_os = "windows") {
+                "ollama-windows-amd64.exe"
+            } else if cfg!(target_os = "macos") {
+                if cfg!(target_arch = "aarch64") {
+                    "ollama-darwin-arm64"
+                } else {
+                    "ollama-darwin-amd64"
+                }
+            } else {
+                "ollama-linux-amd64"
+            };
+
+            let bundled_ollama_binary = resource_dir_for_ollama.join("ollama").join("bin").join(ollama_binary_name);
+            let bundled_ollama_models = resource_dir_for_ollama.join("ollama").join("models");
+
+            // Check if bundled Ollama exists (production build)
+            let use_bundled_ollama = bundled_ollama_binary.exists();
+
+            let (ollama_binary, ollama_models) = if use_bundled_ollama {
+                log::info!("Using bundled Ollama (production mode)");
+                (bundled_ollama_binary, bundled_ollama_models)
+            } else {
+                log::warn!("Bundled Ollama not found, falling back to system Ollama (dev mode)");
+
+                // Fallback to system-installed Ollama for development
+                let system_ollama = which::which("ollama")
+                    .map_err(|e| e.to_string())
+                    .unwrap_or_else(|_| std::path::PathBuf::from("/usr/local/bin/ollama"));
+
+                let system_models = dirs::home_dir()
+                    .map(|h| h.join(".ollama").join("models"))
+                    .unwrap_or_else(|| std::path::PathBuf::from("./.ollama/models"));
+
+                (system_ollama, system_models)
+            };
+
+            let ollama_host = "127.0.0.1:11434".to_string();
+
+            let mut ollama_sidecar = match OllamaSidecar::new(
+                ollama_binary.clone(),
+                ollama_models.clone(),
+                ollama_host.clone(),
+            ) {
+                Ok(sidecar) => {
+                    log::info!("✓ Ollama sidecar manager created");
+                    sidecar
+                }
+                Err(e) => {
+                    if use_bundled_ollama {
+                        log::error!("✗ Failed to create Ollama sidecar: {}", e);
+                        panic!("Cannot start bundled Ollama. Error: {}", e);
+                    } else {
+                        log::warn!("✗ Failed to create Ollama sidecar: {}", e);
+                        log::warn!("  Will rely on external Ollama server");
+                        log::warn!("  Make sure Ollama is installed and running: ollama serve");
+                        // Create a dummy sidecar that won't be started
+                        OllamaSidecar::new(
+                            std::path::PathBuf::from("dummy"),
+                            std::path::PathBuf::from("dummy"),
+                            ollama_host.clone(),
+                        ).unwrap()
+                    }
+                }
+            };
+
+            // Start the Ollama server if we have bundled resources
+            if use_bundled_ollama {
+                match ollama_sidecar.start() {
+                    Ok(()) => {
+                        log::info!("Ollama server starting...");
+
+                        // Wait for readiness in background (non-blocking)
+                        let ollama_host_clone = ollama_host.clone();
+                        tokio::spawn(async move {
+                            // Give it 30 seconds to start
+                            match wait_for_ollama_ready(&ollama_host_clone, 30).await {
+                                Ok(()) => {
+                                    log::info!("✓ Ollama server is ready!");
+                                }
+                                Err(e) => {
+                                    log::error!("✗ Ollama server failed to become ready: {}", e);
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        log::error!("✗ Failed to start Ollama server: {}", e);
+                        panic!("Cannot start Ollama sidecar. Error: {}", e);
+                    }
+                }
+            } else {
+                log::info!("Skipping Ollama sidecar start (using external Ollama)");
+            }
+
+            // Register Ollama sidecar as managed state for shutdown
+            app.manage(Arc::new(StdMutex::new(ollama_sidecar)));
+
             // Load settings again for voice pipeline configuration
             let vad_settings = {
                 let db = database_for_setup.blocking_lock();
@@ -663,7 +976,119 @@ pub fn run() {
 
             let vad_sensitivity = vad_settings.as_ref().map(|s| s.vad_sensitivity).unwrap_or(0.02);
             let vad_timeout_ms = vad_settings.as_ref().map(|s| s.vad_timeout_ms).unwrap_or(1280);
-            let stt_model_name = vad_settings.as_ref().map(|s| s.stt_model_name.clone()).unwrap_or_else(|| "ggml-base.en.bin".to_string());
+            let stt_model_name = vad_settings.as_ref().map(|s| s.stt_model_name.clone()).unwrap_or_else(|| "ggml-tiny.bin".to_string());
+            let voice_preference = vad_settings.as_ref().map(|s| s.voice_preference.clone()).unwrap_or_else(|| "male".to_string());
+
+            // Initialize Subprocess-based Piper TTS engine with bundled resources
+            log::info!("Initializing subprocess-based Piper TTS engine...");
+
+            // Try bundled resources first (production mode)
+            let resource_dir = app_handle.path().resource_dir()
+                .map_err(|e| format!("Failed to get resource directory: {}", e))
+                .unwrap();
+
+            // Determine platform-specific Piper binary name
+            let piper_binary_name = if cfg!(target_os = "windows") {
+                "piper-windows-x86_64.exe"
+            } else if cfg!(target_os = "macos") {
+                if cfg!(target_arch = "aarch64") {
+                    "piper-macos-arm64"
+                } else {
+                    "piper-macos-x86_64"
+                }
+            } else {
+                "piper-linux-x86_64"
+            };
+
+            let bundled_piper_binary = resource_dir.join("piper").join("bin").join(piper_binary_name);
+
+            // Determine voice model based on user preference
+            let voice_model_file = if voice_preference == "female" {
+                "en_US-amy-medium.onnx"
+            } else {
+                "en_US-lessac-medium.onnx"
+            };
+
+            let bundled_voice_model = resource_dir.join("piper").join("voices").join(voice_model_file);
+            let bundled_espeak_data = resource_dir.join("piper").join("espeak-ng-data");
+
+            // Check if bundled resources exist (production build)
+            let use_bundled = bundled_piper_binary.exists() && bundled_voice_model.exists() && bundled_espeak_data.exists();
+
+            let (piper_binary, voice_model_path, espeak_data_path) = if use_bundled {
+                log::info!("Using bundled Piper resources (production mode)");
+                (bundled_piper_binary, bundled_voice_model, bundled_espeak_data)
+            } else {
+                log::warn!("Bundled resources not detected via resource_dir, checking source tree for dev mode...");
+
+                // In dev mode, try to use resources from source tree
+                let dev_resources_root = std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| exe.parent().map(|p| p.to_path_buf()))
+                    .and_then(|exe_dir| {
+                        exe_dir
+                            .parent()
+                            .and_then(|target| target.parent())
+                            .and_then(|src_tauri| src_tauri.parent())
+                            .map(|root| root.join("resources"))
+                    })
+                    .unwrap_or_else(|| std::path::PathBuf::from("./resources"));
+
+                let dev_piper_binary = dev_resources_root.join("piper").join("bin").join(piper_binary_name);
+                let dev_voice_model = dev_resources_root.join("piper").join("voices").join(voice_model_file);
+                let dev_espeak_data = dev_resources_root.join("piper").join("espeak-ng-data");
+
+                // Check if dev resources exist
+                if dev_piper_binary.exists() && dev_voice_model.exists() && dev_espeak_data.exists() {
+                    log::info!("Using Piper resources from source tree (dev mode)");
+                    (dev_piper_binary, dev_voice_model, dev_espeak_data)
+                } else {
+                    log::warn!("Dev resources not found, falling back to system Piper (may require installation)");
+
+                    // Last resort: system-installed Piper
+                    let system_piper = std::env::var("PIPER_BINARY")
+                        .map(std::path::PathBuf::from)
+                        .or_else(|_| which::which("piper").map_err(|e| e.to_string()))
+                        .unwrap_or_else(|_| std::path::PathBuf::from("/usr/local/bin/piper"));
+
+                    let system_voice = dirs::data_local_dir()
+                        .map(|p| p.join("nivora-aura").join("voices").join(voice_model_file))
+                        .unwrap_or_else(|| std::path::PathBuf::from("./voices").join(voice_model_file));
+
+                    let system_espeak = std::env::var("ESPEAK_DATA_PATH")
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|_| std::path::PathBuf::from("/usr/share/espeak-ng-data"));
+
+                    (system_piper, system_voice, system_espeak)
+                }
+            };
+
+            log::info!("Piper binary path: {:?}", piper_binary);
+            log::info!("Voice model path: {:?} (preference: {})", voice_model_path, voice_preference);
+            log::info!("eSpeak-NG data path: {:?}", espeak_data_path);
+
+            let tts_engine = match TextToSpeech::new(piper_binary.clone(), voice_model_path.clone(), espeak_data_path.clone()) {
+                Ok(tts) => {
+                    log::info!("✓ Subprocess-based Piper TTS engine initialized successfully");
+                    log::info!("  - Piper binary: {:?}", piper_binary);
+                    log::info!("  - Voice model: {:?}", voice_model_path);
+                    log::info!("  - Voice: {} ({})", voice_preference, voice_model_file);
+                    log::info!("  - Mode: {}", if use_bundled { "bundled (production)" } else { "system (dev)" });
+                    Arc::new(TokioMutex::new(tts))
+                }
+                Err(e) => {
+                    log::error!("✗ Failed to initialize subprocess-based Piper TTS engine: {}", e);
+                    if use_bundled {
+                        log::error!("  Bundled resources may be corrupted");
+                    } else {
+                        log::error!("  Please install Piper TTS or ensure voice models are downloaded");
+                    }
+                    panic!("Cannot start TTS engine. Error: {}", e);
+                }
+            };
+
+            // Register TTS engine as managed state
+            app.manage(tts_engine.clone());
 
             // Initialize Native Voice Pipeline
             log::info!("Initializing native voice pipeline...");

@@ -33,6 +33,7 @@ pub struct Settings {
     pub vad_sensitivity: f32,      // Voice activity detection sensitivity (RMS energy threshold, 0.0-1.0)
     pub vad_timeout_ms: u32,       // Silence timeout in milliseconds before ending recording
     pub stt_model_name: String,    // STT (Whisper) model filename (e.g., "ggml-base.en.bin", "ggml-small.en.bin")
+    pub voice_preference: String,  // TTS voice preference ("male" or "female", maps to lessac-medium or amy-medium)
 }
 
 /// Database manager for Aura Desktop
@@ -146,7 +147,7 @@ impl Database {
 
         self.conn
             .execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES ('model_name', 'llama3')",
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('model_name', 'gemma:2b')",
                 [],
             )
             .map_err(|e| format!("Failed to insert default model_name: {}", e))?;
@@ -167,10 +168,25 @@ impl Database {
 
         self.conn
             .execute(
-                "INSERT OR IGNORE INTO settings (key, value) VALUES ('stt_model_name', 'ggml-base.en.bin')",
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('stt_model_name', 'ggml-tiny.bin')",
                 [],
             )
             .map_err(|e| format!("Failed to insert default stt_model_name: {}", e))?;
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('voice_preference', 'male')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default voice_preference: {}", e))?;
+
+        // First-run wizard completion flag
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('first_run_complete', 'false')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default first_run_complete: {}", e))?;
 
         log::info!("Database tables initialized");
 
@@ -383,7 +399,7 @@ impl Database {
                 [],
                 |row| row.get(0),
             )
-            .unwrap_or_else(|_| "llama3".to_string());
+            .unwrap_or_else(|_| "gemma:2b".to_string());
 
         let vad_sensitivity: f32 = self
             .conn
@@ -416,8 +432,17 @@ impl Database {
             )
             .unwrap_or_else(|_| "ggml-base.en.bin".to_string());
 
-        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}",
-                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name);
+        let voice_preference: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'voice_preference'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "male".to_string());
+
+        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}",
+                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference);
 
         Ok(Settings {
             llm_provider,
@@ -428,6 +453,7 @@ impl Database {
             vad_sensitivity,
             vad_timeout_ms,
             stt_model_name,
+            voice_preference,
         })
     }
 
@@ -490,9 +516,47 @@ impl Database {
             )
             .map_err(|e| format!("Failed to save stt_model_name: {}", e))?;
 
-        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}",
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'voice_preference'",
+                params![&settings.voice_preference],
+            )
+            .map_err(|e| format!("Failed to save voice_preference: {}", e))?;
+
+        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}",
                    settings.llm_provider, settings.server_address, settings.wake_word_enabled,
-                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name);
+                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name, settings.voice_preference);
+
+        Ok(())
+    }
+
+    /// Check if first-run wizard has been completed
+    pub fn is_first_run_complete(&self) -> Result<bool, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT value FROM settings WHERE key = 'first_run_complete'")
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+
+        let result = stmt
+            .query_row([], |row| {
+                let value: String = row.get(0)?;
+                Ok(value == "true")
+            })
+            .map_err(|e| format!("Failed to query first_run_complete: {}", e))?;
+
+        Ok(result)
+    }
+
+    /// Mark first-run wizard as complete
+    pub fn mark_first_run_complete(&self) -> Result<(), String> {
+        self.conn
+            .execute(
+                "UPDATE settings SET value = 'true' WHERE key = 'first_run_complete'",
+                [],
+            )
+            .map_err(|e| format!("Failed to update first_run_complete: {}", e))?;
+
+        log::info!("First-run wizard marked as complete");
 
         Ok(())
     }

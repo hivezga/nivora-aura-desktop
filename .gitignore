@@ -55,6 +55,18 @@ lerna-debug.log*
 
 # Models - These are too large for a git repository
 # and should be downloaded by the user as per the README.
-/src-tauri/resources/
 /src-tauri/models/
+/src-tauri/resources/
 ~/.local/share/nivora-aura/
+
+# Ollama models (exceed GitHub LFS 2GB limit)
+# Download separately per OLLAMA_SETUP.md instructions
+resources/ollama/models/blobs/
+resources/ollama/models/manifests/
+
+# Build artifacts (optional - can be distributed via GitHub Releases)
+src-tauri/target/release/bundle/*.deb
+src-tauri/target/release/bundle/*.rpm
+src-tauri/target/release/bundle/*.dmg
+src-tauri/target/release/bundle/*.msi
+src-tauri/target/release/bundle/*.AppImage
