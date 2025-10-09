@@ -1,0 +1,4 @@
+resources/ollama/bin/ollama-* filter=lfs diff=lfs merge=lfs -text
+resources/ollama/models/blobs/sha256-* filter=lfs diff=lfs merge=lfs -text
+resources/piper/voices/*.onnx filter=lfs diff=lfs merge=lfs -text
+resources/piper/bin/piper-* filter=lfs diff=lfs merge=lfs -text
