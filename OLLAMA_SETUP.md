@@ -1,10 +1,10 @@
 # Ollama Resources Setup Guide - Phase 3: Integrated Inference Engine
 
-> **⚠️ IMPORTANT: Models NOT Included in Git Repository**
+> **✅ Models Included via Git LFS**
 >
-> Ollama models are **NOT tracked in Git** due to size constraints. The Gemma 2B model is 1.7GB,
-> which exceeds GitHub's 2GB LFS file limit. You **must** download the model separately
-> following the instructions below before building the application.
+> The Gemma 2B model (1.7GB) is **bundled with the repository via Git LFS**. The model is
+> automatically cloned when you clone the repository (requires Git LFS installed).
+> No separate model download is required - the application is **100% offline-capable** out of the box.
 
 This document describes how to obtain and organize the bundled Ollama server and LLM model for Aura's self-contained AI capabilities.
 
@@ -39,7 +39,7 @@ Download the standalone binaries (not installers):
 
 **Linux (x86_64):**
 ```bash
-wget https://github.com/ollama/ollama/releases/download/v0.5.4/ollama-linux-amd64
+wget https://github.com/ollama/ollama/releases/download/v0.12.3/ollama-linux-amd64
 chmod +x ollama-linux-amd64
 mkdir -p resources/ollama/bin
 mv ollama-linux-amd64 resources/ollama/bin/
@@ -47,14 +47,28 @@ mv ollama-linux-amd64 resources/ollama/bin/
 
 **Windows (x86_64):**
 ```bash
-wget https://github.com/ollama/ollama/releases/download/v0.5.4/ollama-windows-amd64.exe
+# Download the ZIP package (includes supporting libraries)
+wget https://github.com/ollama/ollama/releases/download/v0.12.3/ollama-windows-amd64.zip
 mkdir -p resources/ollama/bin
-mv ollama-windows-amd64.exe resources/ollama/bin/
+cd resources/ollama/bin
+
+# Extract (creates ollama.exe, lib/, and vc_redist.x64.exe)
+unzip ollama-windows-amd64.zip
+mv ollama.exe ollama-windows-amd64.exe
+rm ollama-windows-amd64.zip
+cd ../../..
 ```
+
+**Note:** The Windows package now includes:
+- `ollama-windows-amd64.exe` - Main Ollama binary
+- `lib/ollama/*.dll` - CPU-optimized and GPU support libraries (CUDA, HIP)
+- `vc_redist.x64.exe` - Visual C++ Redistributable
+
+All files in the `bin/` directory will be bundled with the application.
 
 **macOS (x86_64):**
 ```bash
-wget https://github.com/ollama/ollama/releases/download/v0.5.4/ollama-darwin-amd64
+wget https://github.com/ollama/ollama/releases/download/v0.12.3/ollama-darwin-amd64
 chmod +x ollama-darwin-amd64
 mkdir -p resources/ollama/bin
 mv ollama-darwin-amd64 resources/ollama/bin/
@@ -62,7 +76,7 @@ mv ollama-darwin-amd64 resources/ollama/bin/
 
 **macOS (ARM64):**
 ```bash
-wget https://github.com/ollama/ollama/releases/download/v0.5.4/ollama-darwin-arm64
+wget https://github.com/ollama/ollama/releases/download/v0.12.3/ollama-darwin-arm64
 chmod +x ollama-darwin-arm64
 mkdir -p resources/ollama/bin
 mv ollama-darwin-arm64 resources/ollama/bin/
@@ -70,7 +84,12 @@ mv ollama-darwin-arm64 resources/ollama/bin/
 
 ### 2. Gemma 2B Model
 
-The model must be pulled using Ollama, then copied from the system location.
+**The model is already included in the repository via Git LFS.**
+
+The instructions below are only needed if:
+- You want to update to a different model version
+- You're not using Git LFS (manual setup)
+- You need to regenerate the model files
 
 **Step 1: Install Ollama temporarily (if not already installed)**
 ```bash
@@ -132,9 +151,13 @@ sha256-* (multiple files, ~1.7 GB total)
 
 ## File Sizes
 
-- Ollama binaries: ~50-100 MB each
-- Gemma 2B model: ~1.7 GB (Q4_K_M quantization)
-- **Total bundle size per platform: ~1.8 GB**
+- **Ollama binaries:**
+  - Linux/macOS: ~30-35 MB (standalone binary)
+  - Windows: ~1.9 GB (includes ollama.exe + supporting DLLs for CPU/GPU optimization)
+- **Gemma 2B model:** ~1.7 GB (Q4_K_M quantization)
+- **Total bundle size:**
+  - Linux/macOS: ~1.75 GB
+  - Windows: ~3.6 GB (includes CUDA and HIP libraries for GPU acceleration)
 
 ## Environment Configuration
 
@@ -145,11 +168,15 @@ The bundled Ollama will be configured with:
 
 ## Notes
 
-- Ollama binaries are CPU-only (GPU support deferred to future optimization)
+- **Ollama v0.12.3 includes GPU acceleration support:**
+  - Windows: Includes CUDA (v12, v13) and HIP (AMD) libraries
+  - GPU support is automatic if compatible hardware is detected
+  - CPU-optimized variants for different Intel/AMD architectures
 - The bundled model (gemma:2b) is quantized to Q4_K_M for efficiency (~2B parameters)
 - Ollama runs as a managed sidecar process, not a system service
 - The process is automatically started on app launch and stopped on app close
 - All resources are bundled only for the target platform during build
+- **Important:** The Windows bundle is significantly larger (~3.6 GB vs ~1.75 GB) due to GPU support libraries
 
 ## License
 

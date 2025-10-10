@@ -59,10 +59,8 @@ lerna-debug.log*
 /src-tauri/resources/
 ~/.local/share/nivora-aura/
 
-# Ollama models (exceed GitHub LFS 2GB limit)
-# Download separately per OLLAMA_SETUP.md instructions
-resources/ollama/models/blobs/
-resources/ollama/models/manifests/
+# Ollama models are tracked via Git LFS (1.6GB - under 2GB limit)
+# Bundled for 100% offline capability - no separate download required
 
 # Build artifacts (optional - can be distributed via GitHub Releases)
 src-tauri/target/release/bundle/*.deb
