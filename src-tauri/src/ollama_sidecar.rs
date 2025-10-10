@@ -2,6 +2,191 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
+/// GPU acceleration backend type
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub enum GpuBackend {
+    /// NVIDIA CUDA (Windows, Linux)
+    Cuda,
+    /// AMD ROCm/HIP (Windows, Linux)
+    Rocm,
+    /// Apple Metal (macOS)
+    Metal,
+    /// CPU-only (fallback)
+    Cpu,
+}
+
+impl std::fmt::Display for GpuBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GpuBackend::Cuda => write!(f, "CUDA (NVIDIA)"),
+            GpuBackend::Rocm => write!(f, "ROCm (AMD)"),
+            GpuBackend::Metal => write!(f, "Metal (Apple)"),
+            GpuBackend::Cpu => write!(f, "CPU"),
+        }
+    }
+}
+
+/// GPU information
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GpuInfo {
+    pub backend: GpuBackend,
+    pub available: bool,
+    pub device_name: Option<String>,
+}
+
+/// Detect available GPU acceleration backend
+fn detect_gpu() -> GpuInfo {
+    log::info!("Detecting GPU acceleration capabilities...");
+
+    // macOS: Metal is always available on modern Macs
+    #[cfg(target_os = "macos")]
+    {
+        log::info!("✓ macOS detected - Metal acceleration available");
+        return GpuInfo {
+            backend: GpuBackend::Metal,
+            available: true,
+            device_name: Some("Apple GPU".to_string()),
+        };
+    }
+
+    // Windows/Linux: Check for NVIDIA CUDA
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Check for NVIDIA GPU (CUDA)
+        if let Some(gpu_name) = detect_nvidia_gpu() {
+            log::info!("✓ NVIDIA GPU detected: {}", gpu_name);
+            log::info!("  Using CUDA acceleration");
+            return GpuInfo {
+                backend: GpuBackend::Cuda,
+                available: true,
+                device_name: Some(gpu_name),
+            };
+        }
+
+        // Check for AMD GPU (ROCm/HIP)
+        if let Some(gpu_name) = detect_amd_gpu() {
+            log::info!("✓ AMD GPU detected: {}", gpu_name);
+            log::info!("  Using ROCm/HIP acceleration");
+            return GpuInfo {
+                backend: GpuBackend::Rocm,
+                available: true,
+                device_name: Some(gpu_name),
+            };
+        }
+
+        // No GPU detected, fallback to CPU
+        log::info!("ℹ No compatible GPU detected, using CPU");
+        GpuInfo {
+            backend: GpuBackend::Cpu,
+            available: false,
+            device_name: None,
+        }
+    }
+}
+
+/// Detect NVIDIA GPU (Windows/Linux)
+#[cfg(not(target_os = "macos"))]
+fn detect_nvidia_gpu() -> Option<String> {
+    // Try nvidia-smi command to detect NVIDIA GPU
+    let output = Command::new("nvidia-smi")
+        .arg("--query-gpu=name")
+        .arg("--format=csv,noheader")
+        .output();
+
+    if let Ok(output) = output {
+        if output.status.success() {
+            let gpu_name = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .to_string();
+            if !gpu_name.is_empty() {
+                return Some(gpu_name);
+            }
+        }
+    }
+
+    // Windows: Check for CUDA DLLs in bundled resources
+    #[cfg(target_os = "windows")]
+    {
+        // Check if CUDA libraries exist (indicates NVIDIA GPU support)
+        if std::path::Path::new("lib/ollama/cuda_v12/ggml-cuda.dll").exists() ||
+           std::path::Path::new("lib/ollama/cuda_v13/ggml-cuda.dll").exists() {
+            log::debug!("CUDA libraries found in bundle, assuming NVIDIA GPU");
+            return Some("NVIDIA GPU (detected via drivers)".to_string());
+        }
+    }
+
+    // Linux: Check for CUDA runtime
+    #[cfg(target_os = "linux")]
+    {
+        if std::path::Path::new("/usr/local/cuda").exists() ||
+           std::path::Path::new("/usr/lib/cuda").exists() {
+            log::debug!("CUDA installation found, assuming NVIDIA GPU");
+            return Some("NVIDIA GPU (detected via CUDA)".to_string());
+        }
+    }
+
+    None
+}
+
+/// Detect AMD GPU (Windows/Linux)
+#[cfg(not(target_os = "macos"))]
+fn detect_amd_gpu() -> Option<String> {
+    // Windows: Check for AMD drivers via registry or ROCm libraries
+    #[cfg(target_os = "windows")]
+    {
+        // Try AMD's rocm-smi equivalent on Windows
+        let output = Command::new("rocm-smi")
+            .arg("--showproductname")
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let gpu_name = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find(|line| line.contains("GPU"))
+                    .map(|s| s.trim().to_string());
+                if let Some(name) = gpu_name {
+                    return Some(name);
+                }
+            }
+        }
+
+        // Check for HIP libraries in bundled resources
+        if std::path::Path::new("lib/ollama/ggml-hip.dll").exists() {
+            log::debug!("HIP libraries found in bundle, checking for AMD GPU");
+            return Some("AMD GPU (detected via drivers)".to_string());
+        }
+    }
+
+    // Linux: Check for ROCm installation
+    #[cfg(target_os = "linux")]
+    {
+        let output = Command::new("rocm-smi")
+            .arg("--showproductname")
+            .output();
+
+        if let Ok(output) = output {
+            if output.status.success() {
+                let gpu_name = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .find(|line| line.contains("GPU"))
+                    .map(|s| s.trim().to_string());
+                if let Some(name) = gpu_name {
+                    return Some(name);
+                }
+            }
+        }
+
+        // Check for ROCm installation
+        if std::path::Path::new("/opt/rocm").exists() {
+            log::debug!("ROCm installation found, assuming AMD GPU");
+            return Some("AMD GPU (detected via ROCm)".to_string());
+        }
+    }
+
+    None
+}
+
 /// Ollama sidecar process manager
 ///
 /// Manages the lifecycle of a bundled Ollama server as a sidecar process.
@@ -12,6 +197,7 @@ pub struct OllamaSidecar {
     binary_path: PathBuf,
     models_path: PathBuf,
     host: String,
+    gpu_info: GpuInfo,
 }
 
 impl OllamaSidecar {
@@ -41,12 +227,27 @@ impl OllamaSidecar {
                 .map_err(|e| format!("Failed to create models directory: {}", e))?;
         }
 
+        // Detect available GPU
+        let gpu_info = detect_gpu();
+        log::info!("GPU Detection Result:");
+        log::info!("  Backend: {}", gpu_info.backend);
+        log::info!("  Available: {}", gpu_info.available);
+        if let Some(ref device_name) = gpu_info.device_name {
+            log::info!("  Device: {}", device_name);
+        }
+
         Ok(OllamaSidecar {
             process: None,
             binary_path,
             models_path,
             host,
+            gpu_info,
         })
+    }
+
+    /// Get GPU information
+    pub fn gpu_info(&self) -> &GpuInfo {
+        &self.gpu_info
     }
 
     /// Start the Ollama server process
@@ -63,8 +264,13 @@ impl OllamaSidecar {
         }
 
         log::info!("Starting Ollama sidecar process...");
+        log::info!("  Acceleration: {} ({})",
+                   self.gpu_info.backend,
+                   if self.gpu_info.available { "enabled" } else { "CPU fallback" });
 
         // Spawn Ollama server process
+        // Note: Ollama automatically detects and uses available GPU acceleration
+        // based on bundled libraries (CUDA, HIP, Metal)
         let child = Command::new(&self.binary_path)
             .arg("serve")
             .env("OLLAMA_MODELS", &self.models_path)

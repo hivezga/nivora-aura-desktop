@@ -692,6 +692,26 @@ async fn fetch_available_models(db: State<'_, DatabaseState>) -> Result<Vec<Stri
     Ok(model_names)
 }
 
+/// Get GPU acceleration status
+#[tauri::command]
+async fn get_gpu_info(
+    ollama_sidecar: State<'_, Arc<StdMutex<OllamaSidecar>>>
+) -> Result<ollama_sidecar::GpuInfo, AuraError> {
+    log::info!("Tauri command: get_gpu_info called");
+
+    let sidecar = ollama_sidecar.lock()
+        .map_err(|e| AuraError::Internal(format!("Failed to lock Ollama sidecar: {}", e)))?;
+
+    let gpu_info = sidecar.gpu_info().clone();
+
+    log::info!("GPU Info: backend={}, available={}, device={:?}",
+               gpu_info.backend,
+               gpu_info.available,
+               gpu_info.device_name);
+
+    Ok(gpu_info)
+}
+
 /// Wait for Ollama server to become ready
 ///
 /// Polls the Ollama API until it responds or times out
@@ -845,7 +865,8 @@ pub fn run() {
             check_setup_status,
             download_whisper_model,
             mark_setup_complete,
-            fetch_available_models
+            fetch_available_models,
+            get_gpu_info
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
