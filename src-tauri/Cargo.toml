@@ -31,25 +31,25 @@ tokio = { version = "1.40", features = ["full"] }  # Async runtime for voice pip
 reqwest = { version = "0.12", features = ["json"] }  # HTTP client for OpenAI-compatible API calls
 
 # Database and storage
-rusqlite = { version = "0.32", features = ["bundled"] }  # SQLite database for conversation persistence
-dirs = "5.0"  # Cross-platform user directory access
-keyring = "2.3"  # Secure API key storage using OS native keychain
+rusqlite = { version = "0.37", features = ["bundled"] }  # SQLite database for conversation persistence
+dirs = "6.0"  # Cross-platform user directory access
+keyring = "3.6"  # Secure API key storage using OS native keychain
 
 # Native voice pipeline
 whisper-rs = "0.15"  # Whisper.cpp bindings for speech-to-text
-cpal = "0.15"  # Cross-platform audio I/O
+cpal = "0.16"  # Cross-platform audio I/O
 
 # Text-to-Speech using Piper TTS (subprocess-based)
-rodio = "0.17"  # Audio playback
+rodio = "0.21"  # Audio playback
 hound = "3.5"  # WAV file handling for in-memory audio conversion
 
 # Error handling
-thiserror = "1.0"  # Custom error types with derived Error trait
+thiserror = "2.0"  # Custom error types with derived Error trait
 
 # First-run wizard utilities
-which = "6.0"  # Check if executables exist in PATH
+which = "8.0"  # Check if executables exist in PATH
 
 # Ollama sidecar process management
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.29", features = ["signal"] }  # Unix signal handling for graceful Ollama shutdown
+nix = { version = "0.30", features = ["signal"] }  # Unix signal handling for graceful Ollama shutdown
 
