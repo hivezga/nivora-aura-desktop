@@ -34,6 +34,13 @@ pub struct Settings {
     pub vad_timeout_ms: u32,       // Silence timeout in milliseconds before ending recording
     pub stt_model_name: String,    // STT (Whisper) model filename (e.g., "ggml-base.en.bin", "ggml-small.en.bin")
     pub voice_preference: String,  // TTS voice preference ("male" or "female", maps to lessac-medium or amy-medium)
+
+    // RAG / Online Mode Settings
+    pub online_mode_enabled: bool,          // Enable/disable web search for RAG (default: false, requires explicit opt-in)
+    pub search_backend: String,             // "searxng" or "brave" (default: "searxng")
+    pub searxng_instance_url: String,       // SearXNG instance URL (default: "https://searx.be")
+    pub brave_search_api_key: Option<String>, // Brave Search API key (optional, stored in OS keyring)
+    pub max_search_results: u32,            // Maximum number of search results to use (1-20, default: 5)
 }
 
 /// Database manager for Aura Desktop
@@ -187,6 +194,35 @@ impl Database {
                 [],
             )
             .map_err(|e| format!("Failed to insert default first_run_complete: {}", e))?;
+
+        // RAG / Online Mode Settings (disabled by default for privacy)
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('online_mode_enabled', 'false')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default online_mode_enabled: {}", e))?;
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('search_backend', 'searxng')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default search_backend: {}", e))?;
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('searxng_instance_url', 'https://searx.be')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default searxng_instance_url: {}", e))?;
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('max_search_results', '5')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default max_search_results: {}", e))?;
 
         log::info!("Database tables initialized");
 
@@ -441,8 +477,53 @@ impl Database {
             )
             .unwrap_or_else(|_| "male".to_string());
 
-        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}",
-                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference);
+        // Load RAG / Online Mode settings
+        let online_mode_enabled_str: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'online_mode_enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "false".to_string());
+
+        let online_mode_enabled = online_mode_enabled_str == "true";
+
+        let search_backend: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'search_backend'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "searxng".to_string());
+
+        let searxng_instance_url: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'searxng_instance_url'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "https://searx.be".to_string());
+
+        let max_search_results: u32 = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'max_search_results'",
+                [],
+                |row| row.get(0),
+            )
+            .ok()
+            .and_then(|s: String| s.parse().ok())
+            .unwrap_or(5);
+
+        // Brave Search API key is stored in OS keyring, not database
+        // Will be loaded separately when needed
+        let brave_search_api_key: Option<String> = None;
+
+        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}",
+                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference, online_mode_enabled, search_backend, max_search_results);
 
         Ok(Settings {
             llm_provider,
@@ -454,6 +535,11 @@ impl Database {
             vad_timeout_ms,
             stt_model_name,
             voice_preference,
+            online_mode_enabled,
+            search_backend,
+            searxng_instance_url,
+            brave_search_api_key,
+            max_search_results,
         })
     }
 
@@ -523,9 +609,41 @@ impl Database {
             )
             .map_err(|e| format!("Failed to save voice_preference: {}", e))?;
 
-        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}",
+        // Save RAG / Online Mode settings
+        let online_mode_enabled_str = if settings.online_mode_enabled { "true" } else { "false" };
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'online_mode_enabled'",
+                params![online_mode_enabled_str],
+            )
+            .map_err(|e| format!("Failed to save online_mode_enabled: {}", e))?;
+
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'search_backend'",
+                params![&settings.search_backend],
+            )
+            .map_err(|e| format!("Failed to save search_backend: {}", e))?;
+
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'searxng_instance_url'",
+                params![&settings.searxng_instance_url],
+            )
+            .map_err(|e| format!("Failed to save searxng_instance_url: {}", e))?;
+
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'max_search_results'",
+                params![settings.max_search_results.to_string()],
+            )
+            .map_err(|e| format!("Failed to save max_search_results: {}", e))?;
+
+        // Note: brave_search_api_key is stored in OS keyring, not database
+
+        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}",
                    settings.llm_provider, settings.server_address, settings.wake_word_enabled,
-                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name, settings.voice_preference);
+                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name, settings.voice_preference, settings.online_mode_enabled, settings.search_backend, settings.max_search_results);
 
         Ok(())
     }

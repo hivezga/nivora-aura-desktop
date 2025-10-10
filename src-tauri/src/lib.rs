@@ -5,6 +5,7 @@ mod database;
 mod secrets;
 mod error;
 mod ollama_sidecar;
+mod web_search;
 
 use native_voice::NativeVoicePipeline;
 use tts::TextToSpeech;
@@ -32,11 +33,85 @@ fn greet(name: &str) -> String {
 }
 
 #[tauri::command]
-async fn handle_user_prompt(prompt: String, llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>) -> Result<String, AuraError> {
+async fn handle_user_prompt(
+    prompt: String,
+    llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>,
+    db: State<'_, DatabaseState>,
+) -> Result<String, AuraError> {
     log::info!("Tauri command: handle_user_prompt called with: '{}'", prompt);
 
+    // Load settings to check if online mode is enabled
+    let settings = {
+        let database = db.lock().await;
+        database.load_settings()
+            .map_err(|e| AuraError::Internal(format!("Failed to load settings: {}", e)))?
+    };
+
+    // Determine final prompt (with or without RAG)
+    let augmented_prompt = if settings.online_mode_enabled {
+        log::info!("Online mode enabled, performing web search for RAG...");
+
+        // Determine search backend from settings
+        let search_backend = match settings.search_backend.as_str() {
+            "searxng" => {
+                web_search::SearchBackend::SearXNG {
+                    instance_url: settings.searxng_instance_url.clone(),
+                }
+            }
+            "brave" => {
+                // Get Brave API key from settings
+                let api_key = settings.brave_search_api_key
+                    .clone()
+                    .ok_or_else(|| AuraError::Internal(
+                        "Brave Search selected but no API key configured. Please set it in Settings.".to_string()
+                    ))?;
+
+                web_search::SearchBackend::BraveSearch { api_key }
+            }
+            backend => {
+                log::warn!("Unknown search backend '{}', defaulting to SearXNG", backend);
+                web_search::SearchBackend::SearXNG {
+                    instance_url: "https://searx.be".to_string(),
+                }
+            }
+        };
+
+        // Perform web search
+        match web_search::search_web(
+            &prompt,
+            search_backend,
+            settings.max_search_results as usize,
+        ).await {
+            Ok(results) if !results.is_empty() => {
+                log::info!("✓ Web search successful: {} results found", results.len());
+
+                // Format search results as context
+                let context = web_search::format_search_context(&results);
+
+                // Augment prompt with search context
+                format!(
+                    "{}\nUser Question: {}",
+                    context,
+                    prompt
+                )
+            }
+            Ok(_) => {
+                log::warn!("⚠ Web search returned 0 results, using offline mode");
+                prompt.clone()
+            }
+            Err(e) => {
+                log::warn!("⚠ Web search failed: {}, falling back to offline mode", e);
+                prompt.clone()
+            }
+        }
+    } else {
+        log::debug!("Online mode disabled, using offline LLM query");
+        prompt.clone()
+    };
+
+    // Query LLM with (possibly augmented) prompt
     let llm = llm_engine.inner().lock().await;
-    let result = llm.generate_response(&prompt).await
+    let result = llm.generate_response(&augmented_prompt).await
         .map_err(|e| AuraError::Llm(e))?;
 
     Ok(result)
@@ -233,10 +308,15 @@ async fn save_settings(
     vad_timeout_ms: u32,
     stt_model_name: String,
     voice_preference: String,
+    online_mode_enabled: bool,
+    search_backend: String,
+    searxng_instance_url: String,
+    brave_search_api_key: Option<String>,
+    max_search_results: u32,
     db: State<'_, DatabaseState>
 ) -> Result<(), AuraError> {
-    log::info!("Tauri command: save_settings called (provider: {}, server: {}, wake_word: {}, api_base_url: {}, model: {}, vad_sensitivity: {}, vad_timeout_ms: {}, stt_model: {}, voice: {})",
-               llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference);
+    log::info!("Tauri command: save_settings called (provider: {}, server: {}, wake_word: {}, api_base_url: {}, model: {}, vad_sensitivity: {}, vad_timeout_ms: {}, stt_model: {}, voice: {}, online_mode: {}, search_backend: {}, max_results: {})",
+               llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference, online_mode_enabled, search_backend, max_search_results);
 
     let db = db.inner().lock().await;
 
@@ -250,6 +330,11 @@ async fn save_settings(
         vad_timeout_ms,
         stt_model_name,
         voice_preference,
+        online_mode_enabled,
+        search_backend,
+        searxng_instance_url,
+        brave_search_api_key,
+        max_search_results,
     };
 
     db.save_settings(&settings)
@@ -412,11 +497,23 @@ async fn reload_voice_pipeline(
     {
         let db = database.lock().await;
 
-        // Load existing voice preference (this command doesn't modify it)
-        let existing_voice_preference = db.load_settings()
-            .ok()
-            .map(|s| s.voice_preference)
-            .unwrap_or_else(|| "male".to_string());
+        // Load existing settings (this command doesn't modify voice preference or RAG settings)
+        let existing_settings = db.load_settings().ok().unwrap_or_else(|| Settings {
+            llm_provider: "local".to_string(),
+            server_address: "".to_string(),
+            wake_word_enabled: false,
+            api_base_url: "http://localhost:11434/v1".to_string(),
+            model_name: "gemma:2b".to_string(),
+            vad_sensitivity: 0.02,
+            vad_timeout_ms: 1280,
+            stt_model_name: "ggml-base.en.bin".to_string(),
+            voice_preference: "male".to_string(),
+            online_mode_enabled: false,
+            search_backend: "searxng".to_string(),
+            searxng_instance_url: "https://searx.be".to_string(),
+            brave_search_api_key: None,
+            max_search_results: 5,
+        });
 
         let settings_to_save = Settings {
             llm_provider: llm_provider.clone(),
@@ -427,7 +524,13 @@ async fn reload_voice_pipeline(
             vad_sensitivity,
             vad_timeout_ms,
             stt_model_name: stt_model_name.clone(),
-            voice_preference: existing_voice_preference,
+            voice_preference: existing_settings.voice_preference,
+            // Preserve RAG settings
+            online_mode_enabled: existing_settings.online_mode_enabled,
+            search_backend: existing_settings.search_backend,
+            searxng_instance_url: existing_settings.searxng_instance_url,
+            brave_search_api_key: existing_settings.brave_search_api_key,
+            max_search_results: existing_settings.max_search_results,
         };
 
         db.save_settings(&settings_to_save)
@@ -800,6 +903,12 @@ pub fn run() {
             vad_timeout_ms: 1280,
             stt_model_name: "ggml-base.en.bin".to_string(),
             voice_preference: "male".to_string(),
+            // RAG / Online Mode defaults (disabled by default for privacy)
+            online_mode_enabled: false,
+            search_backend: "searxng".to_string(),
+            searxng_instance_url: "https://searx.be".to_string(),
+            brave_search_api_key: None,
+            max_search_results: 5,
         }
     });
     drop(db_for_llm); // Release the lock

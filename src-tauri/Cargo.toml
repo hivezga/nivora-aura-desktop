@@ -22,7 +22,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 log = "0.4"
 env_logger = "0.11"
 
@@ -48,6 +48,9 @@ thiserror = "2.0"  # Custom error types with derived Error trait
 
 # First-run wizard utilities
 which = "8.0"  # Check if executables exist in PATH
+
+# Web search for RAG (Retrieval-Augmented Generation)
+searxng = "0.1.0"  # SearXNG client for privacy-focused web search
 
 # Ollama sidecar process management
 [target.'cfg(unix)'.dependencies]
