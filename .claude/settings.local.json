@@ -3,7 +3,13 @@
     "allow": [
       "Bash(cargo check:*)",
       "Bash(cargo clean:*)",
-      "Bash(pnpm build:*)"
+      "Bash(pnpm build:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\nfeat: Add privacy-focused web search (RAG) with dual backend support\n\nImplements Retrieval-Augmented Generation (RAG) for Aura with a privacy-first approach:\n\n**Features:**\n- Dual search backend support: SearXNG (privacy-focused) and Brave Search\n- Opt-in online mode (disabled by default)\n- Graceful fallback to offline mode on errors\n- OS keyring integration for secure API key storage\n- Configurable search result limits (1-20 results)\n- User-selectable SearXNG instances\n\n**Technical Details:**\n- New `web_search` module with async search client\n- Database schema extended with RAG settings\n- Settings UI updated with Online Mode section\n- Comprehensive error handling and retry logic\n- Full documentation in Documentation/ folder\n\n**Privacy Guarantees:**\n- No telemetry or tracking\n- User-selected search providers\n- Explicit opt-in required\n- All search queries stay local by default\n\nCloses: Online Connectivity (RAG) Epic\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")",
+      "Bash(git push:*)",
+      "WebSearch",
+      "Bash(find:*)"
     ],
     "deny": [],
     "ask": []

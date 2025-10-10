@@ -21,6 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { showErrorToast } from "../utils/errorHandler";
+import SpotifySettings from "./SpotifySettings";
 
 const SettingsModal: React.FC = () => {
   const isOpen = useChatStore((state) => state.isSettingsOpen);
@@ -462,6 +463,21 @@ const SettingsModal: React.FC = () => {
               </p>
             </div>
           </div>
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-gray-800"></div>
+
+        {/* Spotify Music Integration */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-200 mb-3">Spotify Music Integration</h3>
+            <p className="text-xs text-gray-500 mb-4">
+              Control your Spotify playback with voice commands. Requires a Spotify Premium account.
+            </p>
+          </div>
+
+          <SpotifySettings />
         </div>
 
         <DialogFooter className="gap-2">

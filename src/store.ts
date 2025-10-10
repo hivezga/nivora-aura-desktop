@@ -24,6 +24,11 @@ export interface Settings {
   vad_timeout_ms: number;       // Silence timeout in milliseconds (100-10000)
   stt_model_name: string;       // STT (Whisper) model filename (e.g., "ggml-base.en.bin")
   voice_preference: string;     // TTS voice preference ("male" or "female")
+
+  // Spotify Music Integration
+  spotify_connected?: boolean;        // Whether Spotify is connected (optional for backward compatibility)
+  spotify_client_id?: string;         // Spotify app client ID (optional)
+  spotify_auto_play_enabled?: boolean; // Auto-play music via voice commands (optional)
 }
 
 export type AppStatus = "idle" | "listening" | "processing" | "speaking";

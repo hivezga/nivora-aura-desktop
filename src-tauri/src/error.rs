@@ -33,6 +33,10 @@ pub enum AuraError {
     #[error("Secrets error: {0}")]
     Secrets(String),
 
+    /// Spotify integration errors (OAuth, API calls, playback)
+    #[error("Spotify error: {0}")]
+    Spotify(String),
+
     /// File I/O errors (model loading, directory access)
     #[error("File I/O error: {0}")]
     Io(#[from] std::io::Error),

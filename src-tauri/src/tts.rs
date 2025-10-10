@@ -1,4 +1,4 @@
-use rodio::{OutputStream, Sink};
+use rodio::Sink;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -245,13 +245,12 @@ impl TextToSpeech {
     fn play_audio(&self, wav_data: &[u8]) -> Result<(), String> {
         log::debug!("Initializing audio playback...");
 
-        // Get default audio output device
-        let (_stream, stream_handle) = OutputStream::try_default()
+        // Get default audio output device (rodio 0.21 API)
+        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()
             .map_err(|e| format!("Failed to open audio output device: {}", e))?;
 
-        // Create audio sink for playback
-        let sink = Sink::try_new(&stream_handle)
-            .map_err(|e| format!("Failed to create audio sink: {}", e))?;
+        // Create audio sink for playback (rodio 0.21 API)
+        let sink = Sink::connect_new(stream_handle.mixer());
 
         // Decode WAV from memory (clone data to give it 'static lifetime)
         let cursor = Cursor::new(wav_data.to_vec());

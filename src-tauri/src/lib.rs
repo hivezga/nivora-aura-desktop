@@ -6,6 +6,9 @@ mod secrets;
 mod error;
 mod ollama_sidecar;
 mod web_search;
+mod spotify_auth;
+mod spotify_client;
+mod music_intent;
 
 use native_voice::NativeVoicePipeline;
 use tts::TextToSpeech;
@@ -320,6 +323,27 @@ async fn save_settings(
 
     let db = db.inner().lock().await;
 
+    // Load existing settings to preserve Spotify configuration
+    let existing_settings = db.load_settings().ok().unwrap_or_else(|| Settings {
+        llm_provider: "local".to_string(),
+        server_address: String::new(),
+        wake_word_enabled: false,
+        api_base_url: "http://localhost:11434/v1".to_string(),
+        model_name: "gemma:2b".to_string(),
+        vad_sensitivity: 0.02,
+        vad_timeout_ms: 1280,
+        stt_model_name: "ggml-base.en.bin".to_string(),
+        voice_preference: "male".to_string(),
+        online_mode_enabled: false,
+        search_backend: "searxng".to_string(),
+        searxng_instance_url: "https://searx.be".to_string(),
+        brave_search_api_key: None,
+        max_search_results: 5,
+        spotify_connected: false,
+        spotify_client_id: String::new(),
+        spotify_auto_play_enabled: true,
+    });
+
     let settings = Settings {
         llm_provider,
         server_address,
@@ -335,6 +359,10 @@ async fn save_settings(
         searxng_instance_url,
         brave_search_api_key,
         max_search_results,
+        // Preserve existing Spotify settings
+        spotify_connected: existing_settings.spotify_connected,
+        spotify_client_id: existing_settings.spotify_client_id,
+        spotify_auto_play_enabled: existing_settings.spotify_auto_play_enabled,
     };
 
     db.save_settings(&settings)
@@ -497,7 +525,7 @@ async fn reload_voice_pipeline(
     {
         let db = database.lock().await;
 
-        // Load existing settings (this command doesn't modify voice preference or RAG settings)
+        // Load existing settings (this command doesn't modify voice preference, RAG, or Spotify settings)
         let existing_settings = db.load_settings().ok().unwrap_or_else(|| Settings {
             llm_provider: "local".to_string(),
             server_address: "".to_string(),
@@ -513,6 +541,9 @@ async fn reload_voice_pipeline(
             searxng_instance_url: "https://searx.be".to_string(),
             brave_search_api_key: None,
             max_search_results: 5,
+            spotify_connected: false,
+            spotify_client_id: String::new(),
+            spotify_auto_play_enabled: true,
         });
 
         let settings_to_save = Settings {
@@ -531,6 +562,10 @@ async fn reload_voice_pipeline(
             searxng_instance_url: existing_settings.searxng_instance_url,
             brave_search_api_key: existing_settings.brave_search_api_key,
             max_search_results: existing_settings.max_search_results,
+            // Preserve Spotify settings
+            spotify_connected: existing_settings.spotify_connected,
+            spotify_client_id: existing_settings.spotify_client_id,
+            spotify_auto_play_enabled: existing_settings.spotify_auto_play_enabled,
         };
 
         db.save_settings(&settings_to_save)
@@ -855,6 +890,384 @@ async fn wait_for_ollama_ready(host: &str, timeout_secs: u64) -> Result<(), Stri
     }
 }
 
+// =============================================================================
+// Spotify Music Integration Commands
+// =============================================================================
+
+use spotify_auth::{SpotifyAuth, calculate_token_expiry};
+use spotify_client::{SpotifyClient, SpotifyError, format_track_info, format_currently_playing};
+use music_intent::{MusicIntentParser, MusicIntent};
+
+/// Start Spotify OAuth2 authorization flow
+///
+/// Opens the user's browser to Spotify's authorization page, waits for callback,
+/// and exchanges the authorization code for access/refresh tokens.
+#[tauri::command]
+async fn spotify_start_auth(
+    client_id: String,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!("Starting Spotify authorization for client ID: {}", client_id);
+
+    // Create auth manager
+    let auth = SpotifyAuth::new(client_id.clone());
+
+    // Start OAuth2 flow (this will block until user authorizes or times out)
+    let token_response = auth.start_authorization()
+        .await
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    // Save tokens to OS keyring
+    secrets::save_spotify_access_token(&token_response.access_token)
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    if let Some(refresh_token) = &token_response.refresh_token {
+        secrets::save_spotify_refresh_token(refresh_token)
+            .map_err(|e| AuraError::Secrets(e))?;
+    }
+
+    // Calculate and save token expiry
+    let expiry = calculate_token_expiry(token_response.expires_in);
+    secrets::save_spotify_token_expiry(&expiry)
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Update database: mark as connected and save client ID
+    let database = db.lock().await;
+    let mut settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+
+    settings.spotify_connected = true;
+    settings.spotify_client_id = client_id;
+
+    database.save_settings(&settings)
+        .map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ Spotify authorization successful and settings saved");
+
+    Ok(())
+}
+
+/// Disconnect Spotify account
+///
+/// Removes all tokens from OS keyring and updates database connection status
+#[tauri::command]
+async fn spotify_disconnect(db: State<'_, DatabaseState>) -> Result<(), AuraError> {
+    log::info!("Disconnecting Spotify");
+
+    // Delete tokens from keyring
+    secrets::delete_spotify_tokens()
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Update database
+    let database = db.lock().await;
+    let mut settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+
+    settings.spotify_connected = false;
+
+    database.save_settings(&settings)
+        .map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ Spotify disconnected successfully");
+
+    Ok(())
+}
+
+/// Spotify connection status response
+#[derive(serde::Serialize)]
+struct SpotifyStatusResponse {
+    connected: bool,
+    client_id: String,
+    auto_play_enabled: bool,
+}
+
+/// Get Spotify connection status
+#[tauri::command]
+async fn spotify_get_status(db: State<'_, DatabaseState>) -> Result<SpotifyStatusResponse, AuraError> {
+    let database = db.lock().await;
+    let settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+
+    // Verify tokens actually exist in keyring
+    let connected = settings.spotify_connected && secrets::is_spotify_connected();
+
+    Ok(SpotifyStatusResponse {
+        connected,
+        client_id: settings.spotify_client_id,
+        auto_play_enabled: settings.spotify_auto_play_enabled,
+    })
+}
+
+/// Save Spotify client ID to database
+#[tauri::command]
+async fn spotify_save_client_id(
+    client_id: String,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!("Saving Spotify client ID");
+
+    let database = db.lock().await;
+    let mut settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+
+    settings.spotify_client_id = client_id;
+
+    database.save_settings(&settings)
+        .map_err(|e| AuraError::Database(e))?;
+
+    Ok(())
+}
+
+/// Handle music command with intent recognition and Spotify playback
+///
+/// This is the main entry point for voice/text music commands. It parses the
+/// user's intent, searches Spotify, and controls playback accordingly.
+#[tauri::command]
+async fn spotify_handle_music_command(
+    command: String,
+    db: State<'_, DatabaseState>,
+) -> Result<String, AuraError> {
+    log::info!("Handling music command: '{}'", command);
+
+    // Check if Spotify is connected
+    if !secrets::is_spotify_connected() {
+        return Err(AuraError::Spotify(
+            "Spotify is not connected. Please connect your Spotify account in Settings.".to_string()
+        ));
+    }
+
+    // Get client ID from database
+    let database = db.lock().await;
+    let settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+    drop(database); // Release lock
+
+    let client_id = settings.spotify_client_id;
+
+    if client_id.is_empty() {
+        return Err(AuraError::Spotify(
+            "Spotify client ID not configured. Please enter your client ID in Settings.".to_string()
+        ));
+    }
+
+    // Parse music intent
+    let intent = MusicIntentParser::parse(&command);
+    log::info!("Parsed intent: {:?}", intent);
+
+    // Create Spotify client
+    let client = SpotifyClient::new(client_id)
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    // Handle intent
+    match intent {
+        MusicIntent::PlaySong { song, artist } => {
+            // Search for track
+            let tracks = client.search_track(&song, artist.as_deref(), 10)
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            if tracks.is_empty() {
+                let query = if let Some(artist) = artist {
+                    format!("{} by {}", song, artist)
+                } else {
+                    song.clone()
+                };
+                return Err(AuraError::Spotify(format!("No tracks found for '{}'", query)));
+            }
+
+            // Play first result
+            let track = &tracks[0];
+            client.play_track(&track.uri)
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            let message = format!("Now playing: {}", format_track_info(track));
+            log::info!("{}", message);
+            Ok(message)
+        }
+
+        MusicIntent::PlayPlaylist { playlist_name } => {
+            // Search user playlists
+            let playlists = client.get_user_playlists(50)
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            // Find playlist by name (case-insensitive)
+            let playlist = playlists.iter().find(|p| {
+                p.name.to_lowercase() == playlist_name.to_lowercase()
+            });
+
+            match playlist {
+                Some(playlist) => {
+                    // Note: Playing playlists requires context URI, not implemented in basic client
+                    // For now, return a helpful message
+                    Ok(format!("Found playlist '{}' with {} tracks. Playlist playback coming soon!", playlist.name, playlist.tracks.total))
+                }
+                None => {
+                    Err(AuraError::Spotify(format!("Playlist '{}' not found", playlist_name)))
+                }
+            }
+        }
+
+        MusicIntent::PlayArtist { artist } => {
+            // Search for artist's top tracks
+            let tracks = client.search_track(&artist, Some(&artist), 10)
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            if tracks.is_empty() {
+                return Err(AuraError::Spotify(format!("No tracks found for artist '{}'", artist)));
+            }
+
+            // Play first result
+            let track = &tracks[0];
+            client.play_track(&track.uri)
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            let message = format!("Playing {} by {}", track.name, track.artists[0].name);
+            log::info!("{}", message);
+            Ok(message)
+        }
+
+        MusicIntent::Pause => {
+            client.pause()
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            Ok("Music paused".to_string())
+        }
+
+        MusicIntent::Resume => {
+            client.resume()
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            Ok("Music resumed".to_string())
+        }
+
+        MusicIntent::Next => {
+            client.next()
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            Ok("Skipped to next track".to_string())
+        }
+
+        MusicIntent::Previous => {
+            client.previous()
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            Ok("Skipped to previous track".to_string())
+        }
+
+        MusicIntent::GetCurrentTrack => {
+            let current = client.get_current_track()
+                .await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+            let message = format_currently_playing(&current);
+            Ok(message)
+        }
+
+        MusicIntent::Unknown => {
+            Ok("I didn't understand that music command. Try 'play [song] by [artist]', 'pause', 'next', or 'what's playing?'".to_string())
+        }
+    }
+}
+
+/// Control Spotify playback (pause, resume, next, previous)
+#[tauri::command]
+async fn spotify_control_playback(
+    action: String,
+    db: State<'_, DatabaseState>,
+) -> Result<String, AuraError> {
+    log::info!("Spotify playback control: {}", action);
+
+    if !secrets::is_spotify_connected() {
+        return Err(AuraError::Spotify("Spotify not connected".to_string()));
+    }
+
+    let database = db.lock().await;
+    let settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+    drop(database);
+
+    let client = SpotifyClient::new(settings.spotify_client_id)
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    match action.as_str() {
+        "pause" => {
+            client.pause().await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+            Ok("Paused".to_string())
+        }
+        "resume" | "play" => {
+            client.resume().await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+            Ok("Resumed".to_string())
+        }
+        "next" => {
+            client.next().await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+            Ok("Next track".to_string())
+        }
+        "previous" => {
+            client.previous().await
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+            Ok("Previous track".to_string())
+        }
+        _ => Err(AuraError::Spotify(format!("Unknown playback action: {}", action)))
+    }
+}
+
+/// Get currently playing track info
+#[tauri::command]
+async fn spotify_get_current_track(db: State<'_, DatabaseState>) -> Result<serde_json::Value, AuraError> {
+    if !secrets::is_spotify_connected() {
+        return Err(AuraError::Spotify("Spotify not connected".to_string()));
+    }
+
+    let database = db.lock().await;
+    let settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+    drop(database);
+
+    let client = SpotifyClient::new(settings.spotify_client_id)
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    let current = client.get_current_track().await
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    // Serialize to JSON for frontend
+    serde_json::to_value(&current)
+        .map_err(|e| AuraError::Serialization(e))
+}
+
+/// Get available Spotify Connect devices
+#[tauri::command]
+async fn spotify_get_devices(db: State<'_, DatabaseState>) -> Result<serde_json::Value, AuraError> {
+    if !secrets::is_spotify_connected() {
+        return Err(AuraError::Spotify("Spotify not connected".to_string()));
+    }
+
+    let database = db.lock().await;
+    let settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+    drop(database);
+
+    let client = SpotifyClient::new(settings.spotify_client_id)
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    let devices = client.get_devices().await
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    // Serialize to JSON for frontend
+    serde_json::to_value(&devices)
+        .map_err(|e| AuraError::Serialization(e))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger
@@ -909,6 +1322,10 @@ pub fn run() {
             searxng_instance_url: "https://searx.be".to_string(),
             brave_search_api_key: None,
             max_search_results: 5,
+            // Spotify defaults (disconnected by default)
+            spotify_connected: false,
+            spotify_client_id: String::new(),
+            spotify_auto_play_enabled: true,
         }
     });
     drop(db_for_llm); // Release the lock
@@ -975,7 +1392,16 @@ pub fn run() {
             download_whisper_model,
             mark_setup_complete,
             fetch_available_models,
-            get_gpu_info
+            get_gpu_info,
+            // Spotify Music Integration commands
+            spotify_start_auth,
+            spotify_disconnect,
+            spotify_get_status,
+            spotify_save_client_id,
+            spotify_handle_music_command,
+            spotify_control_playback,
+            spotify_get_current_track,
+            spotify_get_devices
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

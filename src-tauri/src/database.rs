@@ -41,6 +41,11 @@ pub struct Settings {
     pub searxng_instance_url: String,       // SearXNG instance URL (default: "https://searx.be")
     pub brave_search_api_key: Option<String>, // Brave Search API key (optional, stored in OS keyring)
     pub max_search_results: u32,            // Maximum number of search results to use (1-20, default: 5)
+
+    // Spotify Music Integration Settings
+    pub spotify_connected: bool,            // Whether Spotify is connected (has valid tokens in keyring)
+    pub spotify_client_id: String,          // Spotify app client ID (user-provided from developer dashboard)
+    pub spotify_auto_play_enabled: bool,    // Auto-play music via voice commands (default: true)
 }
 
 /// Database manager for Aura Desktop
@@ -223,6 +228,28 @@ impl Database {
                 [],
             )
             .map_err(|e| format!("Failed to insert default max_search_results: {}", e))?;
+
+        // Spotify Music Integration Settings (disconnected by default)
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('spotify_connected', 'false')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default spotify_connected: {}", e))?;
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('spotify_client_id', '')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default spotify_client_id: {}", e))?;
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('spotify_auto_play_enabled', 'true')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default spotify_auto_play_enabled: {}", e))?;
 
         log::info!("Database tables initialized");
 
@@ -522,8 +549,40 @@ impl Database {
         // Will be loaded separately when needed
         let brave_search_api_key: Option<String> = None;
 
-        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}",
-                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference, online_mode_enabled, search_backend, max_search_results);
+        // Load Spotify Music Integration settings
+        let spotify_connected_str: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'spotify_connected'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "false".to_string());
+
+        let spotify_connected = spotify_connected_str == "true";
+
+        let spotify_client_id: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'spotify_client_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| String::new());
+
+        let spotify_auto_play_enabled_str: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'spotify_auto_play_enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "true".to_string());
+
+        let spotify_auto_play_enabled = spotify_auto_play_enabled_str == "true";
+
+        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}, spotify_connected={}, spotify_auto_play={}",
+                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference, online_mode_enabled, search_backend, max_search_results, spotify_connected, spotify_auto_play_enabled);
 
         Ok(Settings {
             llm_provider,
@@ -540,6 +599,9 @@ impl Database {
             searxng_instance_url,
             brave_search_api_key,
             max_search_results,
+            spotify_connected,
+            spotify_client_id,
+            spotify_auto_play_enabled,
         })
     }
 
@@ -641,9 +703,33 @@ impl Database {
 
         // Note: brave_search_api_key is stored in OS keyring, not database
 
-        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}",
+        // Save Spotify Music Integration settings
+        let spotify_connected_str = if settings.spotify_connected { "true" } else { "false" };
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'spotify_connected'",
+                params![spotify_connected_str],
+            )
+            .map_err(|e| format!("Failed to save spotify_connected: {}", e))?;
+
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'spotify_client_id'",
+                params![&settings.spotify_client_id],
+            )
+            .map_err(|e| format!("Failed to save spotify_client_id: {}", e))?;
+
+        let spotify_auto_play_enabled_str = if settings.spotify_auto_play_enabled { "true" } else { "false" };
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'spotify_auto_play_enabled'",
+                params![spotify_auto_play_enabled_str],
+            )
+            .map_err(|e| format!("Failed to save spotify_auto_play_enabled: {}", e))?;
+
+        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}, spotify_connected={}, spotify_auto_play={}",
                    settings.llm_provider, settings.server_address, settings.wake_word_enabled,
-                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name, settings.voice_preference, settings.online_mode_enabled, settings.search_backend, settings.max_search_results);
+                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name, settings.voice_preference, settings.online_mode_enabled, settings.search_backend, settings.max_search_results, settings.spotify_connected, settings.spotify_auto_play_enabled);
 
         Ok(())
     }
