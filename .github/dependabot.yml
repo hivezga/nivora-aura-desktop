@@ -1,0 +1,49 @@
+version: 2
+updates:
+  # Check for Rust dependency updates
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+    # Group Rust updates to avoid overwhelming PRs
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+    # Limit open PRs to avoid noise
+    open-pull-requests-limit: 5
+    # Add labels for easier filtering
+    labels:
+      - "dependencies"
+      - "rust"
+
+  # Check for Node.js dependency updates
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Group Node.js updates
+    groups:
+      frontend-dependencies:
+        patterns:
+          - "*"
+    # Limit open PRs
+    open-pull-requests-limit: 5
+    # Add labels
+    labels:
+      - "dependencies"
+      - "frontend"
+
+  # Check for GitHub Actions updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # Group actions updates
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    labels:
+      - "dependencies"
+      - "github-actions"

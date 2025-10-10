@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          lfs: true  # Required for Git LFS files (models, GPU libraries)
+
+      - name: Checkout LFS objects
+        run: git lfs pull
+
+      # Install pnpm
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Platform-specific system dependencies
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libasound2-dev
+
+      - name: Install macOS dependencies
+        if: matrix.platform == 'macos-latest'
+        run: |
+          # Install Rosetta 2 for cross-compilation on Apple Silicon
+          if [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            softwareupdate --install-rosetta --agree-to-license || true
+          fi
+
+      # Install frontend dependencies
+      - name: Install frontend dependencies
+        run: pnpm install
+
+      # Use tauri-action for building and releasing
+      - name: Build and release Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Add code signing secrets if available
+          # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # APPLE_ID: ${{ secrets.APPLE_ID }}
+          # APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          # TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          # TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Aura Desktop v__VERSION__'
+          releaseBody: |
+            ## Aura Desktop v__VERSION__
+
+            Privacy-focused, local-first AI assistant for desktop.
+
+            ### Features
+            - 🎤 Voice input with Whisper speech-to-text
+            - 🤖 Local LLM inference with Ollama (Gemma 2B bundled)
+            - 🔊 Natural text-to-speech with Piper
+            - 🔒 100% offline capable - no internet required
+            - 💾 Local conversation history
+
+            ### Installation
+            Download the appropriate installer for your platform below.
+
+            **Note:** First launch may take 30-60 seconds as the bundled AI model loads.
+
+            ### Platform-Specific Notes
+            - **Windows:** NSIS installer (`.exe`) is recommended
+            - **macOS:** DMG installer - may require allowing unsigned apps in System Preferences
+            - **Linux:** AppImage (no installation), DEB (Debian/Ubuntu), or RPM (Fedora/RHEL)
+
+            See the [README](https://github.com/nivora-ai/aura-desktop) for full documentation.
+          releaseDraft: true
+          prerelease: false
+          # Specify which files to include in the release
+          # The action automatically detects platform-specific bundles
+          args: --target ${{ matrix.target }}
+
+  # Create release notes after all builds complete
+  finalize-release:
+    needs: build-tauri
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate release notes
+        run: |
+          echo "Release ${{ github.ref_name }} has been built for all platforms."
+          echo "Review and publish the draft release on GitHub."
