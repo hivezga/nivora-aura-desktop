@@ -9,32 +9,75 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # Fetch all history for changelog generation
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # Extract commits since last tag
+          PREV_TAG=$(git describe --abbrev=0 --tags $(git rev-list --tags --skip=1 --max-count=1) 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            # First release
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Generate changelog since previous tag
+            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+          fi
+
+          # Save to file for use in release body
+          echo "$COMMITS" > CHANGELOG.txt
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: 'Aura Desktop v${{ steps.get_version.outputs.version }}'
+          body_path: CHANGELOG.txt
+          draft: true
+          prerelease: false
+
   build-tauri:
+    needs: create-release
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            artifact_name: 'Linux x64'
           - platform: macos-latest
             target: x86_64-apple-darwin
+            artifact_name: 'macOS Intel'
           - platform: macos-latest
             target: aarch64-apple-darwin
+            artifact_name: 'macOS Apple Silicon'
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            artifact_name: 'Windows x64'
 
     runs-on: ${{ matrix.platform }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-        with:
-          lfs: true  # Required for Git LFS files (models, GPU libraries)
 
-      - name: Checkout LFS objects
-        run: git lfs pull
-
-      # Install pnpm
       - name: Install pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -50,6 +93,19 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-release-
 
       # Platform-specific system dependencies
       - name: Install Linux dependencies
@@ -71,16 +127,15 @@ jobs:
             softwareupdate --install-rosetta --agree-to-license || true
           fi
 
-      # Install frontend dependencies
       - name: Install frontend dependencies
         run: pnpm install
 
       # Use tauri-action for building and releasing
-      - name: Build and release Tauri app
+      - name: Build and upload Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Add code signing secrets if available
+          # Code signing secrets (add these to your repository secrets)
           # APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           # APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           # APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -90,37 +145,42 @@ jobs:
           # TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'Aura Desktop v__VERSION__'
+          releaseName: 'Aura Desktop v${{ needs.create-release.outputs.version }}'
           releaseBody: |
-            ## Aura Desktop v__VERSION__
+            ## Aura Desktop v${{ needs.create-release.outputs.version }}
 
             Privacy-focused, local-first AI assistant for desktop.
 
-            ### Features
+            ### 🎯 What's New
+            See changelog above for detailed changes.
+
+            ### ✨ Features
             - 🎤 Voice input with Whisper speech-to-text
-            - 🤖 Local LLM inference with Ollama (Gemma 2B bundled)
+            - 🤖 Local LLM inference (Ollama compatible)
             - 🔊 Natural text-to-speech with Piper
+            - 🎵 Spotify music control integration
+            - 🏠 Home Assistant smart home control
+            - 👤 Voice biometrics for multi-user personalization
             - 🔒 100% offline capable - no internet required
             - 💾 Local conversation history
 
-            ### Installation
+            ### 📥 Installation
             Download the appropriate installer for your platform below.
 
-            **Note:** First launch may take 30-60 seconds as the bundled AI model loads.
-
-            ### Platform-Specific Notes
+            **Platform Notes:**
             - **Windows:** NSIS installer (`.exe`) is recommended
             - **macOS:** DMG installer - may require allowing unsigned apps in System Preferences
             - **Linux:** AppImage (no installation), DEB (Debian/Ubuntu), or RPM (Fedora/RHEL)
 
+            ### 📚 Documentation
             See the [README](https://github.com/nivora-ai/aura-desktop) for full documentation.
+
+            ### 🐛 Known Issues
+            Report issues at https://github.com/nivora-ai/aura-desktop/issues
           releaseDraft: true
           prerelease: false
-          # Specify which files to include in the release
-          # The action automatically detects platform-specific bundles
           args: --target ${{ matrix.target }}
 
-  # Create release notes after all builds complete
   finalize-release:
     needs: build-tauri
     runs-on: ubuntu-latest
@@ -128,7 +188,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Generate release notes
+      - name: Notify completion
         run: |
-          echo "Release ${{ github.ref_name }} has been built for all platforms."
-          echo "Review and publish the draft release on GitHub."
+          echo "✅ Release build complete for all platforms"
+          echo "📝 Review and publish the draft release on GitHub:"
+          echo "   https://github.com/${{ github.repository }}/releases"

@@ -1,49 +1,60 @@
 version: 2
 updates:
-  # Check for Rust dependency updates
-  - package-ecosystem: "cargo"
-    directory: "/src-tauri"
-    schedule:
-      interval: "weekly"
-    # Group Rust updates to avoid overwhelming PRs
-    groups:
-      rust-dependencies:
-        patterns:
-          - "*"
-    # Limit open PRs to avoid noise
-    open-pull-requests-limit: 5
-    # Add labels for easier filtering
-    labels:
-      - "dependencies"
-      - "rust"
-
-  # Check for Node.js dependency updates
+  # Enable version updates for npm (pnpm)
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
       interval: "weekly"
-    # Group Node.js updates
-    groups:
-      frontend-dependencies:
-        patterns:
-          - "*"
-    # Limit open PRs
-    open-pull-requests-limit: 5
-    # Add labels
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
-      - "frontend"
+      - "javascript"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    # Group minor and patch updates
+    groups:
+      production-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
-  # Check for GitHub Actions updates
+  # Enable version updates for Cargo
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "rust"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    # Group minor and patch updates
+    groups:
+      production-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Enable version updates for GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
-    # Group actions updates
-    groups:
-      github-actions:
-        patterns:
-          - "*"
+      interval: "monthly"
+    open-pull-requests-limit: 5
     labels:
       - "dependencies"
       - "github-actions"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"

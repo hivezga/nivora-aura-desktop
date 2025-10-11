@@ -1,0 +1,42 @@
+# Label PRs based on changed files
+
+"area: backend":
+  - "src-tauri/**/*"
+
+"area: frontend":
+  - "src/**/*"
+  - "*.tsx"
+  - "*.ts"
+
+"area: documentation":
+  - "Documentation/**/*"
+  - "**.md"
+  - "README.md"
+
+"area: ci/cd":
+  - ".github/workflows/**/*"
+  - ".github/dependabot.yml"
+
+"area: dependencies":
+  - "package.json"
+  - "pnpm-lock.yaml"
+  - "src-tauri/Cargo.toml"
+  - "src-tauri/Cargo.lock"
+
+"area: database":
+  - "src-tauri/src/database.rs"
+
+"area: voice":
+  - "src-tauri/src/native_voice.rs"
+  - "src-tauri/src/tts.rs"
+  - "src-tauri/src/voice_biometrics.rs"
+
+"area: integrations":
+  - "src-tauri/src/spotify_*.rs"
+  - "src-tauri/src/ha_*.rs"
+  - "src-tauri/src/music_intent.rs"
+  - "src-tauri/src/smarthome_intent.rs"
+
+"area: ui":
+  - "src/components/**/*"
+  - "src/App.tsx"
