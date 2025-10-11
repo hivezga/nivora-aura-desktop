@@ -12,6 +12,7 @@ mod music_intent;
 mod entity_manager;
 mod ha_client;
 mod smarthome_intent;
+mod voice_biometrics;
 
 use native_voice::NativeVoicePipeline;
 use tts::TextToSpeech;

@@ -134,6 +134,41 @@ impl Database {
             )
             .map_err(|e| format!("Failed to create settings table: {}", e))?;
 
+        // Create user_profiles table for voice biometrics (speaker recognition)
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS user_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    voice_print_embedding BLOB NOT NULL,
+                    enrollment_date TEXT NOT NULL,
+                    last_recognized TEXT,
+                    recognition_count INTEGER DEFAULT 0,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )",
+                [],
+            )
+            .map_err(|e| format!("Failed to create user_profiles table: {}", e))?;
+
+        // Create indexes for user_profiles table
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_profiles_name
+                 ON user_profiles(name)",
+                [],
+            )
+            .map_err(|e| format!("Failed to create user_profiles name index: {}", e))?;
+
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_profiles_active
+                 ON user_profiles(is_active)",
+                [],
+            )
+            .map_err(|e| format!("Failed to create user_profiles active index: {}", e))?;
+
         // Insert default settings if they don't exist
         self.conn
             .execute(
