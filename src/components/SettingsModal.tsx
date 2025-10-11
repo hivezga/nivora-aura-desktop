@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { showErrorToast } from "../utils/errorHandler";
 import SpotifySettings from "./SpotifySettings";
+import HomeAssistantSettings from "./HomeAssistantSettings";
 
 const SettingsModal: React.FC = () => {
   const isOpen = useChatStore((state) => state.isSettingsOpen);
@@ -478,6 +479,18 @@ const SettingsModal: React.FC = () => {
           </div>
 
           <SpotifySettings />
+        </div>
+
+        {/* Home Assistant Integration */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-200 mb-3">Home Assistant Integration</h3>
+            <p className="text-xs text-gray-500 mb-4">
+              Connect to your Home Assistant instance to control your smart home with voice commands.
+            </p>
+          </div>
+
+          <HomeAssistantSettings />
         </div>
 
         <DialogFooter className="gap-2">

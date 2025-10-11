@@ -3,13 +3,17 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import Sidebar from "./components/Sidebar";
 import ChatView from "./components/ChatView";
+import DevicesView from "./components/DevicesView";
 import SettingsModal from "./components/SettingsModal";
 import WelcomeWizard from "./components/WelcomeWizard";
 import { useChatStore } from "./store";
 import { showErrorToast } from "./utils/errorHandler";
 
+type ViewMode = "chat" | "devices";
+
 function App() {
   const [showWizard, setShowWizard] = useState<boolean | null>(null);
+  const [activeView, setActiveView] = useState<ViewMode>("chat");
 
   const setAppStatus = useChatStore((state) => state.setAppStatus);
   const appStatus = useChatStore((state) => state.appStatus);
@@ -288,7 +292,51 @@ function App() {
         <WelcomeWizard onComplete={() => setShowWizard(false)} />
       )}
       <Sidebar />
-      <ChatView />
+
+      {/* Main Content Area with View Switcher */}
+      <div className="flex flex-col flex-1">
+        {/* View Tabs */}
+        <div className="flex-shrink-0 bg-gray-900 border-b border-gray-800">
+          <div className="flex">
+            <button
+              onClick={() => setActiveView("chat")}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${
+                activeView === "chat"
+                  ? "text-purple-400 border-b-2 border-purple-500 bg-gray-950"
+                  : "text-gray-400 hover:text-gray-300 hover:bg-gray-800"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                </svg>
+                Chat
+              </span>
+            </button>
+            <button
+              onClick={() => setActiveView("devices")}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${
+                activeView === "devices"
+                  ? "text-blue-400 border-b-2 border-blue-500 bg-gray-950"
+                  : "text-gray-400 hover:text-gray-300 hover:bg-gray-800"
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                </svg>
+                Devices
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* Active View */}
+        <div className="flex-1 overflow-hidden">
+          {activeView === "chat" ? <ChatView /> : <DevicesView />}
+        </div>
+      </div>
+
       <SettingsModal />
     </div>
   );

@@ -64,6 +64,12 @@ urlencoding = "2.1"  # URL encoding for OAuth parameters
 open = "5.0"  # Open URLs in system browser
 once_cell = "1.20"  # Lazy static initialization for compiled regexes
 
+# Home Assistant Integration
+tokio-tungstenite = "0.21"  # WebSocket client with Tokio runtime support
+tungstenite = "0.21"  # WebSocket protocol implementation
+futures-util = "0.3"  # Stream utilities for WebSocket handling
+async-trait = "0.1"  # Async trait definitions
+
 # Ollama sidecar process management
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.30", features = ["signal"] }  # Unix signal handling for graceful Ollama shutdown

@@ -37,6 +37,10 @@ pub enum AuraError {
     #[error("Spotify error: {0}")]
     Spotify(String),
 
+    /// Home Assistant integration errors (WebSocket, REST API, authentication)
+    #[error("Home Assistant error: {0}")]
+    HomeAssistant(String),
+
     /// File I/O errors (model loading, directory access)
     #[error("File I/O error: {0}")]
     Io(#[from] std::io::Error),

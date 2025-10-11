@@ -11,6 +11,9 @@ const SPOTIFY_ACCESS_TOKEN: &str = "spotify_access_token";
 const SPOTIFY_REFRESH_TOKEN: &str = "spotify_refresh_token";
 const SPOTIFY_TOKEN_EXPIRY: &str = "spotify_token_expiry";
 
+/// Keyring entry name for Home Assistant token
+const HA_ACCESS_TOKEN: &str = "ha_access_token";
+
 /// Save API key to the OS keyring
 ///
 /// Uses the native credential storage:
@@ -241,6 +244,75 @@ pub fn delete_spotify_tokens() -> Result<(), String> {
 /// Check if Spotify tokens are stored (i.e., user is connected)
 pub fn is_spotify_connected() -> bool {
     load_spotify_access_token().is_ok() && load_spotify_refresh_token().is_ok()
+}
+
+// =============================================================================
+// Home Assistant Token Management
+// =============================================================================
+
+/// Save Home Assistant access token to OS keyring
+///
+/// Home Assistant uses Long-Lived Access Tokens that don't expire,
+/// so we only need to store the access token itself.
+pub fn save_ha_access_token(token: &str) -> Result<(), String> {
+    log::info!("Saving Home Assistant access token to OS keyring");
+
+    let entry = Entry::new(SERVICE_NAME, HA_ACCESS_TOKEN)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    entry
+        .set_password(token)
+        .map_err(|e| format!("Failed to save Home Assistant access token: {}", e))?;
+
+    log::info!("Home Assistant access token saved successfully");
+    Ok(())
+}
+
+/// Load Home Assistant access token from OS keyring
+pub fn load_ha_access_token() -> Result<String, String> {
+    log::debug!("Loading Home Assistant access token from OS keyring");
+
+    let entry = Entry::new(SERVICE_NAME, HA_ACCESS_TOKEN)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    match entry.get_password() {
+        Ok(token) => {
+            log::debug!("Home Assistant access token loaded successfully");
+            Ok(token)
+        }
+        Err(keyring::Error::NoEntry) => {
+            Err("No Home Assistant access token found".to_string())
+        }
+        Err(e) => {
+            log::warn!("Failed to load Home Assistant access token: {}", e);
+            Err(format!("Failed to load Home Assistant access token: {}", e))
+        }
+    }
+}
+
+/// Delete Home Assistant access token from OS keyring
+pub fn delete_ha_access_token() -> Result<(), String> {
+    log::info!("Deleting Home Assistant access token from OS keyring");
+
+    let entry = Entry::new(SERVICE_NAME, HA_ACCESS_TOKEN)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    match entry.delete_credential() {
+        Ok(_) => {
+            log::info!("Home Assistant access token deleted successfully");
+            Ok(())
+        }
+        Err(keyring::Error::NoEntry) => {
+            log::info!("No Home Assistant access token to delete");
+            Ok(())
+        }
+        Err(e) => Err(format!("Failed to delete Home Assistant access token: {}", e)),
+    }
+}
+
+/// Check if Home Assistant token is stored (i.e., user is connected)
+pub fn is_ha_connected() -> bool {
+    load_ha_access_token().is_ok()
 }
 
 #[cfg(test)]

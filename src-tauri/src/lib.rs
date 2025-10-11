@@ -9,6 +9,9 @@ mod web_search;
 mod spotify_auth;
 mod spotify_client;
 mod music_intent;
+mod entity_manager;
+mod ha_client;
+mod smarthome_intent;
 
 use native_voice::NativeVoicePipeline;
 use tts::TextToSpeech;
@@ -323,7 +326,7 @@ async fn save_settings(
 
     let db = db.inner().lock().await;
 
-    // Load existing settings to preserve Spotify configuration
+    // Load existing settings to preserve Spotify and Home Assistant configuration
     let existing_settings = db.load_settings().ok().unwrap_or_else(|| Settings {
         llm_provider: "local".to_string(),
         server_address: String::new(),
@@ -342,6 +345,9 @@ async fn save_settings(
         spotify_connected: false,
         spotify_client_id: String::new(),
         spotify_auto_play_enabled: true,
+        ha_connected: false,
+        ha_base_url: String::new(),
+        ha_auto_sync: true,
     });
 
     let settings = Settings {
@@ -363,6 +369,10 @@ async fn save_settings(
         spotify_connected: existing_settings.spotify_connected,
         spotify_client_id: existing_settings.spotify_client_id,
         spotify_auto_play_enabled: existing_settings.spotify_auto_play_enabled,
+        // Preserve existing Home Assistant settings
+        ha_connected: existing_settings.ha_connected,
+        ha_base_url: existing_settings.ha_base_url,
+        ha_auto_sync: existing_settings.ha_auto_sync,
     };
 
     db.save_settings(&settings)
@@ -525,7 +535,7 @@ async fn reload_voice_pipeline(
     {
         let db = database.lock().await;
 
-        // Load existing settings (this command doesn't modify voice preference, RAG, or Spotify settings)
+        // Load existing settings (this command doesn't modify voice preference, RAG, Spotify, or Home Assistant settings)
         let existing_settings = db.load_settings().ok().unwrap_or_else(|| Settings {
             llm_provider: "local".to_string(),
             server_address: "".to_string(),
@@ -544,6 +554,9 @@ async fn reload_voice_pipeline(
             spotify_connected: false,
             spotify_client_id: String::new(),
             spotify_auto_play_enabled: true,
+            ha_connected: false,
+            ha_base_url: String::new(),
+            ha_auto_sync: true,
         });
 
         let settings_to_save = Settings {
@@ -566,6 +579,10 @@ async fn reload_voice_pipeline(
             spotify_connected: existing_settings.spotify_connected,
             spotify_client_id: existing_settings.spotify_client_id,
             spotify_auto_play_enabled: existing_settings.spotify_auto_play_enabled,
+            // Preserve Home Assistant settings
+            ha_connected: existing_settings.ha_connected,
+            ha_base_url: existing_settings.ha_base_url,
+            ha_auto_sync: existing_settings.ha_auto_sync,
         };
 
         db.save_settings(&settings_to_save)
@@ -897,6 +914,9 @@ async fn wait_for_ollama_ready(host: &str, timeout_secs: u64) -> Result<(), Stri
 use spotify_auth::{SpotifyAuth, calculate_token_expiry};
 use spotify_client::{SpotifyClient, SpotifyError, format_track_info, format_currently_playing};
 use music_intent::{MusicIntentParser, MusicIntent};
+use entity_manager::{EntityManager, Entity, EntityFilter};
+use ha_client::HomeAssistantClient;
+use smarthome_intent::{SmartHomeIntentParser, SmartHomeIntent, TemperatureUnit};
 
 /// Start Spotify OAuth2 authorization flow
 ///
@@ -1268,6 +1288,466 @@ async fn spotify_get_devices(db: State<'_, DatabaseState>) -> Result<serde_json:
         .map_err(|e| AuraError::Serialization(e))
 }
 
+// =============================================================================
+// Home Assistant Integration Commands
+// =============================================================================
+
+/// Type alias for Home Assistant client state (shared across commands)
+pub type HAClientState = Arc<TokioMutex<Option<HomeAssistantClient>>>;
+
+/// Type alias for Entity Manager state
+pub type EntityManagerState = Arc<EntityManager>;
+
+/// Response for Home Assistant status query
+#[derive(Serialize)]
+struct HAStatusResponse {
+    connected: bool,
+    base_url: String,
+    entity_count: usize,
+}
+
+/// Connect to Home Assistant
+///
+/// Establishes WebSocket connection, authenticates, and syncs entities.
+#[tauri::command]
+async fn ha_connect(
+    base_url: String,
+    token: String,
+    db: State<'_, DatabaseState>,
+    ha_client_state: State<'_, HAClientState>,
+    entity_manager: State<'_, EntityManagerState>,
+) -> Result<(), AuraError> {
+    log::info!("Connecting to Home Assistant at {}", base_url);
+
+    // Create client
+    let client = HomeAssistantClient::new(
+        base_url.clone(),
+        token.clone(),
+        entity_manager.inner().clone(),
+    );
+
+    // Connect and authenticate
+    client.connect().await
+        .map_err(|e| AuraError::HomeAssistant(e))?;
+
+    // Store client in state
+    let mut ha_client_lock = ha_client_state.lock().await;
+    *ha_client_lock = Some(client);
+    drop(ha_client_lock);
+
+    // Save token to keyring
+    secrets::save_ha_access_token(&token)
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Update database settings
+    let database = db.lock().await;
+    let mut settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+
+    settings.ha_connected = true;
+    settings.ha_base_url = base_url;
+
+    database.save_settings(&settings)
+        .map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ Successfully connected to Home Assistant");
+
+    Ok(())
+}
+
+/// Disconnect from Home Assistant
+#[tauri::command]
+async fn ha_disconnect(
+    db: State<'_, DatabaseState>,
+    ha_client_state: State<'_, HAClientState>,
+) -> Result<(), AuraError> {
+    log::info!("Disconnecting from Home Assistant");
+
+    // Disconnect client
+    let mut ha_client_lock = ha_client_state.lock().await;
+    if let Some(client) = ha_client_lock.as_ref() {
+        client.disconnect().await;
+    }
+    *ha_client_lock = None;
+    drop(ha_client_lock);
+
+    // Delete token from keyring
+    secrets::delete_ha_access_token()
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Update database settings
+    let database = db.lock().await;
+    let mut settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+
+    settings.ha_connected = false;
+    settings.ha_base_url = String::new();
+
+    database.save_settings(&settings)
+        .map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ Disconnected from Home Assistant");
+
+    Ok(())
+}
+
+/// Get Home Assistant connection status
+#[tauri::command]
+async fn ha_get_status(
+    db: State<'_, DatabaseState>,
+    ha_client_state: State<'_, HAClientState>,
+    entity_manager: State<'_, EntityManagerState>,
+) -> Result<HAStatusResponse, AuraError> {
+    let ha_client_lock = ha_client_state.lock().await;
+    let connected = ha_client_lock.is_some() && ha_client_lock.as_ref().unwrap().is_connected().await;
+    drop(ha_client_lock);
+
+    let database = db.lock().await;
+    let settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+    drop(database);
+
+    let entity_count = entity_manager.get_entity_count().await;
+
+    Ok(HAStatusResponse {
+        connected,
+        base_url: settings.ha_base_url,
+        entity_count,
+    })
+}
+
+/// Get all entities (optionally filtered)
+#[tauri::command]
+async fn ha_get_entities(
+    domain: Option<String>,
+    area: Option<String>,
+    entity_manager: State<'_, EntityManagerState>,
+) -> Result<Vec<Entity>, AuraError> {
+    let filter = EntityFilter {
+        domain,
+        area,
+        device_class: None,
+        state: None,
+    };
+
+    let entities = entity_manager.query_entities(filter).await;
+
+    Ok(entities)
+}
+
+/// Get a specific entity by ID
+#[tauri::command]
+async fn ha_get_entity(
+    entity_id: String,
+    entity_manager: State<'_, EntityManagerState>,
+) -> Result<Option<Entity>, AuraError> {
+    let entity = entity_manager.get_entity(&entity_id).await;
+    Ok(entity)
+}
+
+/// Call a Home Assistant service
+#[tauri::command]
+async fn ha_call_service(
+    domain: String,
+    service: String,
+    entity_id: String,
+    data: Option<serde_json::Value>,
+    ha_client_state: State<'_, HAClientState>,
+) -> Result<String, AuraError> {
+    let ha_client_lock = ha_client_state.lock().await;
+
+    if let Some(client) = ha_client_lock.as_ref() {
+        client.call_service(&domain, &service, &entity_id, data).await
+            .map_err(|e| AuraError::HomeAssistant(e))?;
+
+        Ok(format!("✓ Called {}.{} on {}", domain, service, entity_id))
+    } else {
+        Err(AuraError::HomeAssistant("Not connected to Home Assistant".to_string()))
+    }
+}
+
+/// Handle a natural language smart home command
+///
+/// This is the main entry point for voice/text smart home control.
+/// Parses the command, matches entities, and executes the action.
+#[tauri::command]
+async fn ha_handle_smart_home_command(
+    command: String,
+    ha_client_state: State<'_, HAClientState>,
+    entity_manager: State<'_, EntityManagerState>,
+) -> Result<String, AuraError> {
+    log::info!("Processing smart home command: {}", command);
+
+    // Parse intent
+    let intent = SmartHomeIntentParser::parse(&command);
+
+    log::debug!("Parsed intent: {:?}", intent);
+
+    // Check if connected
+    let ha_client_lock = ha_client_state.lock().await;
+    if ha_client_lock.is_none() {
+        return Err(AuraError::HomeAssistant("Not connected to Home Assistant".to_string()));
+    }
+
+    let client = ha_client_lock.as_ref().unwrap();
+
+    // Execute based on intent
+    match intent {
+        SmartHomeIntent::TurnOn { room, device_type, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: device_type.clone(),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok(format!("I couldn't find any {} devices{}",
+                    device_type.unwrap_or_else(|| "".to_string()),
+                    room.map(|r| format!(" in the {}", r)).unwrap_or_default()
+                ));
+            }
+
+            // Turn on all matched entities
+            for entity in &entities {
+                if let Some(domain) = entity.entity_id.split('.').next() {
+                    let _ = client.call_service(domain, "turn_on", &entity.entity_id, None).await;
+                }
+            }
+
+            Ok(format!("✓ Turned on {} device{}",
+                entities.len(),
+                if entities.len() == 1 { "" } else { "s" }
+            ))
+        }
+
+        SmartHomeIntent::TurnOff { room, device_type, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: device_type.clone(),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok(format!("I couldn't find any {} devices{}",
+                    device_type.unwrap_or_else(|| "".to_string()),
+                    room.map(|r| format!(" in the {}", r)).unwrap_or_default()
+                ));
+            }
+
+            // Turn off all matched entities
+            for entity in &entities {
+                if let Some(domain) = entity.entity_id.split('.').next() {
+                    let _ = client.call_service(domain, "turn_off", &entity.entity_id, None).await;
+                }
+            }
+
+            Ok(format!("✓ Turned off {} device{}",
+                entities.len(),
+                if entities.len() == 1 { "" } else { "s" }
+            ))
+        }
+
+        SmartHomeIntent::SetBrightness { room, device_name, brightness } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: Some("light".to_string()),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any lights to adjust".to_string());
+            }
+
+            // Convert percentage to 0-255 range
+            let brightness_value = ((brightness as f32 / 100.0) * 255.0) as u8;
+
+            for entity in &entities {
+                let data = serde_json::json!({
+                    "brightness": brightness_value
+                });
+                let _ = client.call_service("light", "turn_on", &entity.entity_id, Some(data)).await;
+            }
+
+            Ok(format!("✓ Set brightness to {}%", brightness))
+        }
+
+        SmartHomeIntent::SetTemperature { room, temperature, unit } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: Some("climate".to_string()),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any climate devices".to_string());
+            }
+
+            // Convert to target temperature
+            let temp_value = match unit {
+                TemperatureUnit::Fahrenheit => temperature,
+                TemperatureUnit::Celsius => temperature,
+            };
+
+            for entity in &entities {
+                let data = serde_json::json!({
+                    "temperature": temp_value
+                });
+                let _ = client.call_service("climate", "set_temperature", &entity.entity_id, Some(data)).await;
+            }
+
+            Ok(format!("✓ Set temperature to {:.1}°{}",
+                temperature,
+                match unit {
+                    TemperatureUnit::Fahrenheit => "F",
+                    TemperatureUnit::Celsius => "C",
+                }
+            ))
+        }
+
+        SmartHomeIntent::GetState { room, device_type, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: device_type.clone(),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any matching devices".to_string());
+            }
+
+            // Report state of first entity
+            let entity = &entities[0];
+            Ok(format!("{} is {}",
+                entity.attributes.friendly_name.clone().unwrap_or_else(|| entity.entity_id.clone()),
+                entity.state
+            ))
+        }
+
+        SmartHomeIntent::OpenCover { room, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: Some("cover".to_string()),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any covers to open".to_string());
+            }
+
+            for entity in &entities {
+                let _ = client.call_service("cover", "open_cover", &entity.entity_id, None).await;
+            }
+
+            Ok(format!("✓ Opening cover{}", if entities.len() == 1 { "" } else { "s" }))
+        }
+
+        SmartHomeIntent::CloseCover { room, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: Some("cover".to_string()),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any covers to close".to_string());
+            }
+
+            for entity in &entities {
+                let _ = client.call_service("cover", "close_cover", &entity.entity_id, None).await;
+            }
+
+            Ok(format!("✓ Closing cover{}", if entities.len() == 1 { "" } else { "s" }))
+        }
+
+        SmartHomeIntent::Lock { room, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: Some("lock".to_string()),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any locks".to_string());
+            }
+
+            for entity in &entities {
+                let _ = client.call_service("lock", "lock", &entity.entity_id, None).await;
+            }
+
+            Ok(format!("✓ Locked {} lock{}", entities.len(), if entities.len() == 1 { "" } else { "s" }))
+        }
+
+        SmartHomeIntent::Unlock { room, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: Some("lock".to_string()),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any locks".to_string());
+            }
+
+            for entity in &entities {
+                let _ = client.call_service("lock", "unlock", &entity.entity_id, None).await;
+            }
+
+            Ok(format!("✓ Unlocked {} lock{}", entities.len(), if entities.len() == 1 { "" } else { "s" }))
+        }
+
+        SmartHomeIntent::ActivateScene { scene_name } => {
+            let entities = entity_manager.get_all_entities().await;
+
+            // Find scene entity
+            let scene_entity = entities.iter().find(|e| {
+                e.entity_id.starts_with("scene.") &&
+                e.attributes.friendly_name.as_ref().map(|n| n.to_lowercase().contains(&scene_name.to_lowercase())).unwrap_or(false)
+            });
+
+            if let Some(scene) = scene_entity {
+                let _ = client.call_service("scene", "turn_on", &scene.entity_id, None).await;
+                Ok(format!("✓ Activated {} scene", scene_name))
+            } else {
+                Ok(format!("I couldn't find a scene named '{}'", scene_name))
+            }
+        }
+
+        SmartHomeIntent::Toggle { room, device_type, device_name } => {
+            let entities = entity_manager.query_entities(EntityFilter {
+                domain: device_type.clone(),
+                area: room.clone(),
+                device_class: None,
+                state: None,
+            }).await;
+
+            if entities.is_empty() {
+                return Ok("I couldn't find any devices to toggle".to_string());
+            }
+
+            for entity in &entities {
+                if let Some(domain) = entity.entity_id.split('.').next() {
+                    let _ = client.call_service(domain, "toggle", &entity.entity_id, None).await;
+                }
+            }
+
+            Ok(format!("✓ Toggled {} device{}", entities.len(), if entities.len() == 1 { "" } else { "s" }))
+        }
+
+        SmartHomeIntent::Unknown => {
+            Ok("I didn't understand that command. Try something like 'turn on the kitchen lights' or 'set bedroom to 72 degrees'.".to_string())
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger
@@ -1326,6 +1806,10 @@ pub fn run() {
             spotify_connected: false,
             spotify_client_id: String::new(),
             spotify_auto_play_enabled: true,
+            // Home Assistant defaults (disconnected by default)
+            ha_connected: false,
+            ha_base_url: String::new(),
+            ha_auto_sync: true,
         }
     });
     drop(db_for_llm); // Release the lock
@@ -1363,10 +1847,16 @@ pub fn run() {
     // Clone database for use in setup closure
     let database_for_setup = database.clone();
 
+    // Initialize Home Assistant state
+    let entity_manager: EntityManagerState = Arc::new(EntityManager::new());
+    let ha_client_state: HAClientState = Arc::new(TokioMutex::new(None));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(database.clone())
         .manage(llm_engine)
+        .manage(entity_manager)
+        .manage(ha_client_state)
         .invoke_handler(tauri::generate_handler![
             greet,
             handle_user_prompt,
@@ -1401,7 +1891,15 @@ pub fn run() {
             spotify_handle_music_command,
             spotify_control_playback,
             spotify_get_current_track,
-            spotify_get_devices
+            spotify_get_devices,
+            // Home Assistant Integration commands
+            ha_connect,
+            ha_disconnect,
+            ha_get_status,
+            ha_get_entities,
+            ha_get_entity,
+            ha_call_service,
+            ha_handle_smart_home_command
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
