@@ -348,6 +348,7 @@ async fn save_settings(
         ha_connected: false,
         ha_base_url: String::new(),
         ha_auto_sync: true,
+        ha_onboarding_dismissed: false,
     });
 
     let settings = Settings {
@@ -373,6 +374,7 @@ async fn save_settings(
         ha_connected: existing_settings.ha_connected,
         ha_base_url: existing_settings.ha_base_url,
         ha_auto_sync: existing_settings.ha_auto_sync,
+        ha_onboarding_dismissed: existing_settings.ha_onboarding_dismissed,
     };
 
     db.save_settings(&settings)
@@ -557,6 +559,7 @@ async fn reload_voice_pipeline(
             ha_connected: false,
             ha_base_url: String::new(),
             ha_auto_sync: true,
+            ha_onboarding_dismissed: false,
         });
 
         let settings_to_save = Settings {
@@ -583,6 +586,7 @@ async fn reload_voice_pipeline(
             ha_connected: existing_settings.ha_connected,
             ha_base_url: existing_settings.ha_base_url,
             ha_auto_sync: existing_settings.ha_auto_sync,
+            ha_onboarding_dismissed: existing_settings.ha_onboarding_dismissed,
         };
 
         db.save_settings(&settings_to_save)
@@ -1742,10 +1746,33 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Toggled {} device{}", entities.len(), if entities.len() == 1 { "" } else { "s" }))
         }
 
+        SmartHomeIntent::SetupGuide => {
+            Ok("To add devices to your smart home, go to the Devices tab and click 'Guide Me' next to any integration you want to set up. I can help you control: lights, thermostats, locks, covers, media players, and more. Just ask me to 'turn on the kitchen lights' or 'set bedroom to 72 degrees' once your devices are connected!".to_string())
+        }
+
         SmartHomeIntent::Unknown => {
             Ok("I didn't understand that command. Try something like 'turn on the kitchen lights' or 'set bedroom to 72 degrees'.".to_string())
         }
     }
+}
+
+/// Dismiss the Home Assistant onboarding guide
+#[tauri::command]
+async fn ha_dismiss_onboarding(
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    let database = db.lock().await;
+    let mut settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+
+    settings.ha_onboarding_dismissed = true;
+
+    database.save_settings(&settings)
+        .map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ Home Assistant onboarding dismissed");
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1810,6 +1837,7 @@ pub fn run() {
             ha_connected: false,
             ha_base_url: String::new(),
             ha_auto_sync: true,
+            ha_onboarding_dismissed: false,
         }
     });
     drop(db_for_llm); // Release the lock
@@ -1899,7 +1927,8 @@ pub fn run() {
             ha_get_entities,
             ha_get_entity,
             ha_call_service,
-            ha_handle_smart_home_command
+            ha_handle_smart_home_command,
+            ha_dismiss_onboarding
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

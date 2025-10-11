@@ -80,6 +80,9 @@ pub enum SmartHomeIntent {
         scene_name: String,
     },
 
+    /// Request setup guide/onboarding help
+    SetupGuide,
+
     /// Unknown/unparseable command
     Unknown,
 }
@@ -98,6 +101,16 @@ impl SmartHomeIntentParser {
     /// Parse a natural language command into a SmartHomeIntent
     pub fn parse(text: &str) -> SmartHomeIntent {
         let text_lower = text.to_lowercase();
+
+        // Setup guide / onboarding (check first as it's very specific)
+        if text_lower.contains("help") && (text_lower.contains("set up") || text_lower.contains("setup"))
+            || text_lower.contains("guide me through")
+            || text_lower.contains("how do i add")
+            || text_lower.contains("onboarding")
+            || (text_lower.contains("setup") && text_lower.contains("guide"))
+        {
+            return SmartHomeIntent::SetupGuide;
+        }
 
         // Activate scene (check first as it's specific)
         if let Some(scene_name) = Self::extract_scene(&text_lower) {

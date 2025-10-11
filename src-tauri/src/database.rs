@@ -51,6 +51,7 @@ pub struct Settings {
     pub ha_connected: bool,                 // Whether Home Assistant is connected (has valid token in keyring)
     pub ha_base_url: String,                // Home Assistant base URL (e.g., "http://homeassistant.local:8123")
     pub ha_auto_sync: bool,                 // Auto-sync entities on connect (default: true)
+    pub ha_onboarding_dismissed: bool,      // Whether user has dismissed the onboarding guide
 }
 
 /// Database manager for Aura Desktop
@@ -277,6 +278,13 @@ impl Database {
                 [],
             )
             .map_err(|e| format!("Failed to insert default ha_auto_sync: {}", e))?;
+
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES ('ha_onboarding_dismissed', 'false')",
+                [],
+            )
+            .map_err(|e| format!("Failed to insert default ha_onboarding_dismissed: {}", e))?;
 
         log::info!("Database tables initialized");
 
@@ -640,8 +648,19 @@ impl Database {
 
         let ha_auto_sync = ha_auto_sync_str == "true";
 
-        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}, spotify_connected={}, spotify_auto_play={}, ha_connected={}, ha_auto_sync={}",
-                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference, online_mode_enabled, search_backend, max_search_results, spotify_connected, spotify_auto_play_enabled, ha_connected, ha_auto_sync);
+        let ha_onboarding_dismissed_str: String = self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'ha_onboarding_dismissed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "false".to_string());
+
+        let ha_onboarding_dismissed = ha_onboarding_dismissed_str == "true";
+
+        log::info!("Loaded settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}, spotify_connected={}, spotify_auto_play={}, ha_connected={}, ha_auto_sync={}, ha_onboarding_dismissed={}",
+                   llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference, online_mode_enabled, search_backend, max_search_results, spotify_connected, spotify_auto_play_enabled, ha_connected, ha_auto_sync, ha_onboarding_dismissed);
 
         Ok(Settings {
             llm_provider,
@@ -664,6 +683,7 @@ impl Database {
             ha_connected,
             ha_base_url,
             ha_auto_sync,
+            ha_onboarding_dismissed,
         })
     }
 
@@ -813,9 +833,17 @@ impl Database {
             )
             .map_err(|e| format!("Failed to save ha_auto_sync: {}", e))?;
 
-        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}, spotify_connected={}, spotify_auto_play={}, ha_connected={}, ha_auto_sync={}",
+        let ha_onboarding_dismissed_str = if settings.ha_onboarding_dismissed { "true" } else { "false" };
+        self.conn
+            .execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'ha_onboarding_dismissed'",
+                params![ha_onboarding_dismissed_str],
+            )
+            .map_err(|e| format!("Failed to save ha_onboarding_dismissed: {}", e))?;
+
+        log::info!("Saved settings: provider={}, server={}, wake_word={}, api_base_url={}, model={}, vad_sensitivity={}, vad_timeout_ms={}, stt_model={}, voice={}, online_mode={}, search_backend={}, max_results={}, spotify_connected={}, spotify_auto_play={}, ha_connected={}, ha_auto_sync={}, ha_onboarding_dismissed={}",
                    settings.llm_provider, settings.server_address, settings.wake_word_enabled,
-                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name, settings.voice_preference, settings.online_mode_enabled, settings.search_backend, settings.max_search_results, settings.spotify_connected, settings.spotify_auto_play_enabled, settings.ha_connected, settings.ha_auto_sync);
+                   settings.api_base_url, settings.model_name, settings.vad_sensitivity, settings.vad_timeout_ms, settings.stt_model_name, settings.voice_preference, settings.online_mode_enabled, settings.search_backend, settings.max_search_results, settings.spotify_connected, settings.spotify_auto_play_enabled, settings.ha_connected, settings.ha_auto_sync, settings.ha_onboarding_dismissed);
 
         Ok(())
     }
