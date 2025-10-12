@@ -917,7 +917,7 @@ async fn wait_for_ollama_ready(host: &str, timeout_secs: u64) -> Result<(), Stri
 // =============================================================================
 
 use spotify_auth::{SpotifyAuth, calculate_token_expiry};
-use spotify_client::{SpotifyClient, SpotifyError, format_track_info, format_currently_playing};
+use spotify_client::{SpotifyClient, format_track_info, format_currently_playing};
 use music_intent::{MusicIntentParser, MusicIntent};
 use entity_manager::{EntityManager, Entity, EntityFilter};
 use ha_client::HomeAssistantClient;
@@ -1498,7 +1498,7 @@ async fn ha_handle_smart_home_command(
 
     // Execute based on intent
     match intent {
-        SmartHomeIntent::TurnOn { room, device_type, device_name } => {
+        SmartHomeIntent::TurnOn { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),
@@ -1526,7 +1526,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::TurnOff { room, device_type, device_name } => {
+        SmartHomeIntent::TurnOff { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),
@@ -1554,7 +1554,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::SetBrightness { room, device_name, brightness } => {
+        SmartHomeIntent::SetBrightness { room, device_name: _, brightness } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("light".to_string()),
                 area: room.clone(),
@@ -1613,7 +1613,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::GetState { room, device_type, device_name } => {
+        SmartHomeIntent::GetState { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),
@@ -1633,7 +1633,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::OpenCover { room, device_name } => {
+        SmartHomeIntent::OpenCover { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("cover".to_string()),
                 area: room.clone(),
@@ -1652,7 +1652,7 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Opening cover{}", if entities.len() == 1 { "" } else { "s" }))
         }
 
-        SmartHomeIntent::CloseCover { room, device_name } => {
+        SmartHomeIntent::CloseCover { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("cover".to_string()),
                 area: room.clone(),
@@ -1671,7 +1671,7 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Closing cover{}", if entities.len() == 1 { "" } else { "s" }))
         }
 
-        SmartHomeIntent::Lock { room, device_name } => {
+        SmartHomeIntent::Lock { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("lock".to_string()),
                 area: room.clone(),
@@ -1690,7 +1690,7 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Locked {} lock{}", entities.len(), if entities.len() == 1 { "" } else { "s" }))
         }
 
-        SmartHomeIntent::Unlock { room, device_name } => {
+        SmartHomeIntent::Unlock { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("lock".to_string()),
                 area: room.clone(),
@@ -1726,7 +1726,7 @@ async fn ha_handle_smart_home_command(
             }
         }
 
-        SmartHomeIntent::Toggle { room, device_type, device_name } => {
+        SmartHomeIntent::Toggle { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),

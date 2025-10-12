@@ -9,7 +9,7 @@
 // - Comprehensive error types for all API failures
 // - Support for Spotify Connect device control
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use reqwest::{header, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::time::Duration as StdDuration;
