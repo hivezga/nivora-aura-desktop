@@ -987,6 +987,10 @@ async fn wait_for_ollama_ready(host: &str, timeout_secs: u64) -> Result<(), Stri
 // =============================================================================
 
 use entity_manager::{Entity, EntityFilter, EntityManager};
+use spotify_auth::{SpotifyAuth, calculate_token_expiry};
+use spotify_client::{SpotifyClient, format_track_info, format_currently_playing};
+use music_intent::{MusicIntentParser, MusicIntent};
+use entity_manager::{EntityManager, Entity, EntityFilter};
 use ha_client::HomeAssistantClient;
 use music_intent::{MusicIntent, MusicIntentParser};
 use smarthome_intent::{SmartHomeIntent, SmartHomeIntentParser, TemperatureUnit};

@@ -975,6 +975,25 @@ impl Database {
     pub fn query_map_sql<T, F>(&self, sql: &str, params: &[&dyn rusqlite::ToSql], f: F) -> Result<Vec<T>, String>
     where
         F: Fn(&rusqlite::Row) -> rusqlite::Result<T>,
+    /// Execute a query and return the last insert row ID (for voice biometrics)
+    pub fn execute_and_get_last_id(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<i64, String> {
+        self.conn
+            .execute(sql, params)
+            .map_err(|e| format!("Database execute error: {}", e))?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Execute a query (for voice biometrics)
+    pub fn execute_query(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<usize, String> {
+        self.conn
+            .execute(sql, params)
+            .map_err(|e| format!("Database execute error: {}", e))
+    }
+
+    /// Prepare and execute a query that returns rows (for voice biometrics)
+    pub fn query_rows<T, F>(&self, sql: &str, params: &[&dyn rusqlite::ToSql], mapper: F) -> Result<Vec<T>, String>
+    where
+        F: Fn(&rusqlite::Row) -> Result<T, rusqlite::Error>,
     {
         let mut stmt = self.conn
             .prepare(sql)
@@ -995,6 +1014,17 @@ impl Database {
     /// Get the last inserted row ID
     pub fn last_insert_rowid(&self) -> i64 {
         self.conn.last_insert_rowid()
+
+        let rows = stmt
+            .query_map(params, mapper)
+            .map_err(|e| format!("Failed to execute query: {}", e))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| format!("Row mapping error: {}", e))?);
+        }
+
+        Ok(results)
     }
 }
 

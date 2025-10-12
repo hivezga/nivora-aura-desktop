@@ -7,6 +7,8 @@ use chrono::Utc;
 /// Full sherpa-rs integration will be added in the next phase.
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use chrono::Utc;
+use crate::database::Database;
 
 /// Standard embedding dimension for speaker recognition models
 /// (WeSpeaker ECAPA-TDNN uses 192-dimensional embeddings)
@@ -149,6 +151,7 @@ impl VoiceBiometrics {
     pub async fn identify_speaker(
         &self,
         _audio: Vec<f32>,
+        _audio: &[f32],
     ) -> Result<Option<UserProfile>, BiometricsError> {
         // Extract embedding from audio
         // POC: Use simulated embedding
@@ -348,6 +351,21 @@ impl VoiceBiometrics {
         .map_err(|e| BiometricsError::Database(e.to_string()))?;
 
         let user_id = db.last_insert_rowid();
+        let user_id = db.execute_and_get_last_id(
+            "INSERT INTO user_profiles
+             (name, voice_print_embedding, enrollment_date, is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            &[
+                &user_name as &dyn rusqlite::ToSql,
+                &embedding_blob,
+                &now,
+                &true,
+                &now,
+                &now,
+            ],
+        )
+        .map_err(|e| BiometricsError::Database(e))?;
+
         Ok(user_id)
     }
 
@@ -383,6 +401,31 @@ impl VoiceBiometrics {
                 },
             )
             .map_err(|e| BiometricsError::Database(e.to_string()))?;
+        let profiles = db.query_rows(
+            "SELECT id, name, voice_print_embedding, enrollment_date, last_recognized,
+                    recognition_count, is_active, created_at, updated_at
+             FROM user_profiles
+             WHERE is_active = 1",
+            &[],
+            |row| {
+                let embedding_blob: Vec<u8> = row.get(2)?;
+                let voice_print = Self::deserialize_embedding(&embedding_blob)
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+                Ok(UserProfile {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    voice_print_embedding: voice_print,
+                    enrollment_date: row.get(3)?,
+                    last_recognized: row.get(4)?,
+                    recognition_count: row.get(5)?,
+                    is_active: row.get(6)?,
+                    created_at: row.get(7)?,
+                    updated_at: row.get(8)?,
+                })
+            }
+        )
+        .map_err(|e| BiometricsError::Database(e))?;
 
         Ok(profiles)
     }
@@ -395,6 +438,7 @@ impl VoiceBiometrics {
         let params: Vec<&dyn rusqlite::ToSql> = vec![&now, &now, &user_id];
         
         db.execute_sql(
+        db.execute_query(
             "UPDATE user_profiles
              SET recognition_count = recognition_count + 1,
                  last_recognized = ?1,
@@ -403,6 +447,9 @@ impl VoiceBiometrics {
             &params,
         )
         .map_err(|e| BiometricsError::Database(e.to_string()))?;
+            &[&now as &dyn rusqlite::ToSql, &now, &user_id],
+        )
+        .map_err(|e| BiometricsError::Database(e))?;
 
         Ok(())
     }
@@ -418,6 +465,8 @@ impl VoiceBiometrics {
             &params,
         )
         .map_err(|e| BiometricsError::Database(e.to_string()))?;
+        db.execute_query("DELETE FROM user_profiles WHERE id = ?1", &[&user_id])
+            .map_err(|e| BiometricsError::Database(e))?;
 
         log::info!("✓ User profile deleted (ID: {})", user_id);
         Ok(())
