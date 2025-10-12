@@ -1,42 +1,65 @@
 # Label PRs based on changed files
 
 "area: backend":
-  - "src-tauri/**/*"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/**/*"
 
 "area: frontend":
-  - "src/**/*"
-  - "*.tsx"
-  - "*.ts"
+  - changed-files:
+    - any-glob-to-any-file: "src/**/*"
+  - changed-files:
+    - any-glob-to-any-file: "*.tsx"
+  - changed-files:
+    - any-glob-to-any-file: "*.ts"
 
 "area: documentation":
-  - "Documentation/**/*"
-  - "**.md"
-  - "README.md"
+  - changed-files:
+    - any-glob-to-any-file: "Documentation/**/*"
+  - changed-files:
+    - any-glob-to-any-file: "**.md"
+  - changed-files:
+    - any-glob-to-any-file: "README.md"
 
 "area: ci/cd":
-  - ".github/workflows/**/*"
-  - ".github/dependabot.yml"
+  - changed-files:
+    - any-glob-to-any-file: ".github/workflows/**/*"
+  - changed-files:
+    - any-glob-to-any-file: ".github/dependabot.yml"
 
 "area: dependencies":
-  - "package.json"
-  - "pnpm-lock.yaml"
-  - "src-tauri/Cargo.toml"
-  - "src-tauri/Cargo.lock"
+  - changed-files:
+    - any-glob-to-any-file: "package.json"
+  - changed-files:
+    - any-glob-to-any-file: "pnpm-lock.yaml"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/Cargo.toml"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/Cargo.lock"
 
 "area: database":
-  - "src-tauri/src/database.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/database.rs"
 
 "area: voice":
-  - "src-tauri/src/native_voice.rs"
-  - "src-tauri/src/tts.rs"
-  - "src-tauri/src/voice_biometrics.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/native_voice.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/tts.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/voice_biometrics.rs"
 
 "area: integrations":
-  - "src-tauri/src/spotify_*.rs"
-  - "src-tauri/src/ha_*.rs"
-  - "src-tauri/src/music_intent.rs"
-  - "src-tauri/src/smarthome_intent.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/spotify_*.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/ha_*.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/music_intent.rs"
+  - changed-files:
+    - any-glob-to-any-file: "src-tauri/src/smarthome_intent.rs"
 
 "area: ui":
-  - "src/components/**/*"
-  - "src/App.tsx"
+  - changed-files:
+    - any-glob-to-any-file: "src/components/**/*"
+  - changed-files:
+    - any-glob-to-any-file: "src/App.tsx"
