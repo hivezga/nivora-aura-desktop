@@ -1,30 +1,30 @@
-mod native_voice;
-mod tts;
-mod llm;
 mod database;
-mod secrets;
+mod entity_manager;
 mod error;
+mod ha_client;
+mod llm;
+mod music_intent;
+mod native_voice;
 mod ollama_sidecar;
-mod web_search;
+mod secrets;
+mod smarthome_intent;
 mod spotify_auth;
 mod spotify_client;
-mod music_intent;
-mod entity_manager;
-mod ha_client;
-mod smarthome_intent;
+mod tts;
 mod voice_biometrics;
+mod web_search;
 
-use native_voice::NativeVoicePipeline;
-use tts::TextToSpeech;
-use llm::LLMEngine;
-use ollama_sidecar::OllamaSidecar;
-use database::{Database, DatabaseState, Conversation, Message, Settings, get_database_path};
+use database::{get_database_path, Conversation, Database, DatabaseState, Message, Settings};
 use error::AuraError;
-use std::sync::Arc;
-use tokio::sync::Mutex as TokioMutex;
-use std::sync::Mutex as StdMutex;
-use tauri::{Manager, State, Emitter};
+use llm::LLMEngine;
+use native_voice::NativeVoicePipeline;
+use ollama_sidecar::OllamaSidecar;
 use serde::Serialize;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+use tauri::{Emitter, Manager, State};
+use tokio::sync::Mutex as TokioMutex;
+use tts::TextToSpeech;
 
 /// System status payload for frontend (service health check)
 #[derive(Serialize, Clone, Debug)]
@@ -45,12 +45,16 @@ async fn handle_user_prompt(
     llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>,
     db: State<'_, DatabaseState>,
 ) -> Result<String, AuraError> {
-    log::info!("Tauri command: handle_user_prompt called with: '{}'", prompt);
+    log::info!(
+        "Tauri command: handle_user_prompt called with: '{}'",
+        prompt
+    );
 
     // Load settings to check if online mode is enabled
     let settings = {
         let database = db.lock().await;
-        database.load_settings()
+        database
+            .load_settings()
             .map_err(|e| AuraError::Internal(format!("Failed to load settings: {}", e)))?
     };
 
@@ -60,11 +64,9 @@ async fn handle_user_prompt(
 
         // Determine search backend from settings
         let search_backend = match settings.search_backend.as_str() {
-            "searxng" => {
-                web_search::SearchBackend::SearXNG {
-                    instance_url: settings.searxng_instance_url.clone(),
-                }
-            }
+            "searxng" => web_search::SearchBackend::SearXNG {
+                instance_url: settings.searxng_instance_url.clone(),
+            },
             "brave" => {
                 // Get Brave API key from settings
                 let api_key = settings.brave_search_api_key
@@ -76,7 +78,10 @@ async fn handle_user_prompt(
                 web_search::SearchBackend::BraveSearch { api_key }
             }
             backend => {
-                log::warn!("Unknown search backend '{}', defaulting to SearXNG", backend);
+                log::warn!(
+                    "Unknown search backend '{}', defaulting to SearXNG",
+                    backend
+                );
                 web_search::SearchBackend::SearXNG {
                     instance_url: "https://searx.be".to_string(),
                 }
@@ -88,7 +93,9 @@ async fn handle_user_prompt(
             &prompt,
             search_backend,
             settings.max_search_results as usize,
-        ).await {
+        )
+        .await
+        {
             Ok(results) if !results.is_empty() => {
                 log::info!("✓ Web search successful: {} results found", results.len());
 
@@ -96,11 +103,7 @@ async fn handle_user_prompt(
                 let context = web_search::format_search_context(&results);
 
                 // Augment prompt with search context
-                format!(
-                    "{}\nUser Question: {}",
-                    context,
-                    prompt
-                )
+                format!("{}\nUser Question: {}", context, prompt)
             }
             Ok(_) => {
                 log::warn!("⚠ Web search returned 0 results, using offline mode");
@@ -118,14 +121,18 @@ async fn handle_user_prompt(
 
     // Query LLM with (possibly augmented) prompt
     let llm = llm_engine.inner().lock().await;
-    let result = llm.generate_response(&augmented_prompt).await
+    let result = llm
+        .generate_response(&augmented_prompt)
+        .await
         .map_err(|e| AuraError::Llm(e))?;
 
     Ok(result)
 }
 
 #[tauri::command]
-async fn listen_and_transcribe(voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>) -> Result<String, AuraError> {
+async fn listen_and_transcribe(
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>,
+) -> Result<String, AuraError> {
     log::info!("Tauri command: listen_and_transcribe called (Push-to-Talk)");
 
     // Use spawn_blocking because NativeVoicePipeline uses std::sync::Mutex internally
@@ -133,27 +140,39 @@ async fn listen_and_transcribe(voice_pipeline: State<'_, Arc<StdMutex<NativeVoic
     let voice_pipeline_clone = voice_pipeline.inner().clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        let pipeline = voice_pipeline_clone.lock()
+        let pipeline = voice_pipeline_clone
+            .lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
-        pipeline.start_transcription()
+        pipeline
+            .start_transcription()
             .map_err(|e| AuraError::VoicePipeline(e))
-    }).await
+    })
+    .await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     Ok(result)
 }
 
 #[tauri::command]
-async fn speak_text(text: String, tts_engine: State<'_, Arc<TokioMutex<TextToSpeech>>>) -> Result<(), AuraError> {
+async fn speak_text(
+    text: String,
+    tts_engine: State<'_, Arc<TokioMutex<TextToSpeech>>>,
+) -> Result<(), AuraError> {
     log::info!("Tauri command: speak_text called ({} chars)", text.len());
-    log::info!("Text to speak: '{}'", if text.len() > 100 { format!("{}...", &text[..100]) } else { text.clone() });
+    log::info!(
+        "Text to speak: '{}'",
+        if text.len() > 100 {
+            format!("{}...", &text[..100])
+        } else {
+            text.clone()
+        }
+    );
 
     let mut tts = tts_engine.inner().lock().await;
 
     log::info!("TTS engine locked, calling speak()...");
-    let result = tts.speak(&text)
-        .map_err(|e| AuraError::Tts(e));
+    let result = tts.speak(&text).map_err(|e| AuraError::Tts(e));
 
     match &result {
         Ok(_) => log::info!("✓ TTS speak() completed successfully"),
@@ -164,7 +183,9 @@ async fn speak_text(text: String, tts_engine: State<'_, Arc<TokioMutex<TextToSpe
 }
 
 #[tauri::command]
-async fn cancel_generation(llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>) -> Result<(), AuraError> {
+async fn cancel_generation(
+    llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>,
+) -> Result<(), AuraError> {
     log::info!("Tauri command: cancel_generation called");
 
     let llm = llm_engine.inner().lock().await;
@@ -174,19 +195,24 @@ async fn cancel_generation(llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>) ->
 }
 
 #[tauri::command]
-async fn cancel_recording(voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>) -> Result<(), AuraError> {
+async fn cancel_recording(
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>,
+) -> Result<(), AuraError> {
     log::info!("Tauri command: cancel_recording called");
 
     let voice_pipeline_clone = voice_pipeline.inner().clone();
 
     tokio::task::spawn_blocking(move || {
-        let pipeline = voice_pipeline_clone.lock()
+        let pipeline = voice_pipeline_clone
+            .lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
         // Use the new cancel_and_reset method for clean state reset
-        pipeline.cancel_and_reset()
+        pipeline
+            .cancel_and_reset()
             .map_err(|e| AuraError::VoicePipeline(e))
-    }).await
+    })
+    .await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     Ok(())
@@ -199,13 +225,18 @@ async fn load_conversations(db: State<'_, DatabaseState>) -> Result<Vec<Conversa
     log::info!("Tauri command: load_conversations called");
 
     let db = db.inner().lock().await;
-    db.load_conversations()
-        .map_err(|e| AuraError::Database(e))
+    db.load_conversations().map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
-async fn load_messages(conversation_id: i64, db: State<'_, DatabaseState>) -> Result<Vec<Message>, AuraError> {
-    log::info!("Tauri command: load_messages called for conversation {}", conversation_id);
+async fn load_messages(
+    conversation_id: i64,
+    db: State<'_, DatabaseState>,
+) -> Result<Vec<Message>, AuraError> {
+    log::info!(
+        "Tauri command: load_messages called for conversation {}",
+        conversation_id
+    );
 
     let db = db.inner().lock().await;
     db.load_messages(conversation_id)
@@ -226,9 +257,13 @@ async fn save_message(
     conversation_id: i64,
     role: String,
     content: String,
-    db: State<'_, DatabaseState>
+    db: State<'_, DatabaseState>,
 ) -> Result<i64, AuraError> {
-    log::debug!("Tauri command: save_message called (conversation: {}, role: {})", conversation_id, role);
+    log::debug!(
+        "Tauri command: save_message called (conversation: {}, role: {})",
+        conversation_id,
+        role
+    );
 
     let db = db.inner().lock().await;
     db.save_message(conversation_id, &role, &content)
@@ -236,8 +271,14 @@ async fn save_message(
 }
 
 #[tauri::command]
-async fn delete_conversation(conversation_id: i64, db: State<'_, DatabaseState>) -> Result<(), AuraError> {
-    log::info!("Tauri command: delete_conversation called for conversation {}", conversation_id);
+async fn delete_conversation(
+    conversation_id: i64,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!(
+        "Tauri command: delete_conversation called for conversation {}",
+        conversation_id
+    );
 
     let db = db.inner().lock().await;
     db.delete_conversation(conversation_id)
@@ -248,9 +289,13 @@ async fn delete_conversation(conversation_id: i64, db: State<'_, DatabaseState>)
 async fn update_conversation_title(
     conversation_id: i64,
     title: String,
-    db: State<'_, DatabaseState>
+    db: State<'_, DatabaseState>,
 ) -> Result<(), AuraError> {
-    log::info!("Tauri command: update_conversation_title called for conversation {} with title: {}", conversation_id, title);
+    log::info!(
+        "Tauri command: update_conversation_title called for conversation {} with title: {}",
+        conversation_id,
+        title
+    );
 
     let db = db.inner().lock().await;
     db.update_conversation_title(conversation_id, &title)
@@ -260,7 +305,7 @@ async fn update_conversation_title(
 #[tauri::command]
 async fn generate_conversation_title(
     prompt: String,
-    llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>
+    llm_engine: State<'_, Arc<TokioMutex<LLMEngine>>>,
 ) -> Result<String, AuraError> {
     log::info!("Tauri command: generate_conversation_title called");
 
@@ -270,7 +315,9 @@ async fn generate_conversation_title(
     );
 
     let llm = llm_engine.inner().lock().await;
-    let raw_title = llm.generate_response(&title_prompt).await
+    let raw_title = llm
+        .generate_response(&title_prompt)
+        .await
         .map_err(|e| AuraError::Llm(e))?;
 
     // Clean up the title (remove quotes, trim, limit length)
@@ -300,8 +347,7 @@ async fn load_settings(db: State<'_, DatabaseState>) -> Result<Settings, AuraErr
 
     let db = db.inner().lock().await;
 
-    db.load_settings()
-        .map_err(|e| AuraError::Database(e))
+    db.load_settings().map_err(|e| AuraError::Database(e))
 }
 
 #[tauri::command]
@@ -320,7 +366,7 @@ async fn save_settings(
     searxng_instance_url: String,
     brave_search_api_key: Option<String>,
     max_search_results: u32,
-    db: State<'_, DatabaseState>
+    db: State<'_, DatabaseState>,
 ) -> Result<(), AuraError> {
     log::info!("Tauri command: save_settings called (provider: {}, server: {}, wake_word: {}, api_base_url: {}, model: {}, vad_sensitivity: {}, vad_timeout_ms: {}, stt_model: {}, voice: {}, online_mode: {}, search_backend: {}, max_results: {})",
                llm_provider, server_address, wake_word_enabled, api_base_url, model_name, vad_sensitivity, vad_timeout_ms, stt_model_name, voice_preference, online_mode_enabled, search_backend, max_search_results);
@@ -386,35 +432,40 @@ async fn save_settings(
 async fn save_api_key(api_key: String) -> Result<(), AuraError> {
     log::info!("Tauri command: save_api_key called");
 
-    secrets::save_api_key(&api_key)
-        .map_err(|e| AuraError::Secrets(e))
+    secrets::save_api_key(&api_key).map_err(|e| AuraError::Secrets(e))
 }
 
 #[tauri::command]
 async fn load_api_key() -> Result<String, AuraError> {
     log::info!("Tauri command: load_api_key called");
 
-    secrets::load_api_key()
-        .map_err(|e| AuraError::Secrets(e))
+    secrets::load_api_key().map_err(|e| AuraError::Secrets(e))
 }
 
 #[tauri::command]
 async fn update_vad_settings(
     sensitivity: f32,
     timeout_ms: u32,
-    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>,
 ) -> Result<(), AuraError> {
-    log::info!("Tauri command: update_vad_settings called (sensitivity: {}, timeout_ms: {})", sensitivity, timeout_ms);
+    log::info!(
+        "Tauri command: update_vad_settings called (sensitivity: {}, timeout_ms: {})",
+        sensitivity,
+        timeout_ms
+    );
 
     let voice_pipeline_clone = voice_pipeline.inner().clone();
 
     tokio::task::spawn_blocking(move || {
-        let pipeline = voice_pipeline_clone.lock()
+        let pipeline = voice_pipeline_clone
+            .lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
-        pipeline.update_vad_settings(sensitivity, timeout_ms)
+        pipeline
+            .update_vad_settings(sensitivity, timeout_ms)
             .map_err(|e| AuraError::VoicePipeline(e))
-    }).await
+    })
+    .await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     Ok(())
@@ -423,7 +474,7 @@ async fn update_vad_settings(
 #[tauri::command]
 async fn set_voice_state(
     state: String,
-    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>,
 ) -> Result<(), AuraError> {
     log::info!("Tauri command: set_voice_state called (state: {})", state);
 
@@ -440,12 +491,15 @@ async fn set_voice_state(
     let voice_pipeline_clone = voice_pipeline.inner().clone();
 
     tokio::task::spawn_blocking(move || {
-        let pipeline = voice_pipeline_clone.lock()
+        let pipeline = voice_pipeline_clone
+            .lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
-        pipeline.set_state(voice_state)
+        pipeline
+            .set_state(voice_state)
             .map_err(|e| AuraError::VoicePipeline(e))
-    }).await
+    })
+    .await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     Ok(())
@@ -456,11 +510,7 @@ fn check_stt_model_ready(model_path: &std::path::Path, stt_model_name: &str) -> 
     let stt_model = model_path.join(stt_model_name);
     let exists = stt_model.exists();
 
-    log::trace!(
-        "STT model check: {} exists={}",
-        stt_model_name,
-        exists
-    );
+    log::trace!("STT model check: {} exists={}", stt_model_name, exists);
 
     exists
 }
@@ -477,10 +527,7 @@ async fn check_http_service(base_url: &str) -> bool {
     };
 
     // Create a simple HTTP client
-    let client = match reqwest::Client::builder()
-        .timeout(timeout)
-        .build()
-    {
+    let client = match reqwest::Client::builder().timeout(timeout).build() {
         Ok(c) => c,
         Err(e) => {
             log::trace!("Failed to create HTTP client for service check: {}", e);
@@ -604,7 +651,8 @@ async fn reload_voice_pipeline(
     // Stop the old pipeline and create a new one using spawn_blocking
     let new_pipeline = tokio::task::spawn_blocking(move || {
         // First, stop the old pipeline
-        let old_pipeline = voice_pipeline_clone.lock()
+        let old_pipeline = voice_pipeline_clone
+            .lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
         log::info!("Stopping current voice pipeline...");
@@ -626,21 +674,23 @@ async fn reload_voice_pipeline(
 
         // Start the new pipeline
         log::info!("Starting new voice pipeline...");
-        pipeline.start()
-            .map_err(|e| AuraError::VoicePipeline(e))?;
+        pipeline.start().map_err(|e| AuraError::VoicePipeline(e))?;
 
         Ok::<_, AuraError>(pipeline)
-    }).await
+    })
+    .await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     // Replace the old pipeline with the new one
     let voice_pipeline_clone2 = voice_pipeline.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let mut pipeline = voice_pipeline_clone2.lock()
+        let mut pipeline = voice_pipeline_clone2
+            .lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
         *pipeline = new_pipeline;
         Ok::<_, AuraError>(())
-    }).await
+    })
+    .await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
 
     log::info!("✓ Voice pipeline reloaded successfully");
@@ -661,9 +711,7 @@ pub struct SetupStatus {
 
 /// Check the status of all required dependencies
 #[tauri::command]
-async fn check_setup_status(
-    database: State<'_, DatabaseState>,
-) -> Result<SetupStatus, AuraError> {
+async fn check_setup_status(database: State<'_, DatabaseState>) -> Result<SetupStatus, AuraError> {
     log::info!("Checking setup status for first-run wizard");
 
     // Check if first-run wizard has been completed
@@ -687,8 +735,11 @@ async fn check_setup_status(
         whisper_model_path: whisper_model_path.to_string_lossy().to_string(),
     };
 
-    log::info!("Setup status: first_run={}, whisper={}",
-               status.first_run_complete, status.whisper_model_exists);
+    log::info!(
+        "Setup status: first_run={}, whisper={}",
+        status.first_run_complete,
+        status.whisper_model_exists
+    );
 
     Ok(status)
 }
@@ -703,9 +754,7 @@ struct DownloadProgress {
 
 /// Download the Whisper tiny model from HuggingFace
 #[tauri::command]
-async fn download_whisper_model(
-    app_handle: tauri::AppHandle,
-) -> Result<String, AuraError> {
+async fn download_whisper_model(app_handle: tauri::AppHandle) -> Result<String, AuraError> {
     log::info!("Starting Whisper model download");
 
     // Determine download path
@@ -724,20 +773,27 @@ async fn download_whisper_model(
 
     // Download with progress
     let client = reqwest::Client::new();
-    let mut response = client.get(url).send().await
+    let mut response = client
+        .get(url)
+        .send()
+        .await
         .map_err(|e| AuraError::Internal(format!("Failed to start download: {}", e)))?;
 
     let total_size = response.content_length();
 
-    let mut file = tokio::fs::File::create(&dest_path).await
+    let mut file = tokio::fs::File::create(&dest_path)
+        .await
         .map_err(|e| AuraError::Internal(format!("Failed to create file: {}", e)))?;
 
     let mut downloaded: u64 = 0;
 
-    while let Some(chunk) = response.chunk().await
-        .map_err(|e| AuraError::Internal(format!("Failed to download chunk: {}", e)))? {
-
-        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk).await
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| AuraError::Internal(format!("Failed to download chunk: {}", e)))?
+    {
+        tokio::io::AsyncWriteExt::write_all(&mut file, &chunk)
+            .await
             .map_err(|e| AuraError::Internal(format!("Failed to write chunk: {}", e)))?;
 
         downloaded += chunk.len() as u64;
@@ -755,20 +811,22 @@ async fn download_whisper_model(
             percentage,
         };
 
-        app_handle.emit("download_progress", progress)
+        app_handle
+            .emit("download_progress", progress)
             .map_err(|e| AuraError::Internal(format!("Failed to emit progress: {}", e)))?;
     }
 
-    log::info!("✓ Whisper model downloaded successfully to: {}", dest_path.display());
+    log::info!(
+        "✓ Whisper model downloaded successfully to: {}",
+        dest_path.display()
+    );
 
     Ok(dest_path.to_string_lossy().to_string())
 }
 
 /// Mark the first-run wizard as complete
 #[tauri::command]
-async fn mark_setup_complete(
-    database: State<'_, DatabaseState>,
-) -> Result<(), AuraError> {
+async fn mark_setup_complete(database: State<'_, DatabaseState>) -> Result<(), AuraError> {
     log::info!("Marking first-run setup as complete");
 
     let db = database.lock().await;
@@ -788,8 +846,7 @@ async fn fetch_available_models(db: State<'_, DatabaseState>) -> Result<Vec<Stri
     // Load settings to get API base URL
     let settings = {
         let db = db.inner().lock().await;
-        db.load_settings()
-            .map_err(|e| AuraError::Database(e))?
+        db.load_settings().map_err(|e| AuraError::Database(e))?
     };
 
     let api_url = format!("{}/tags", settings.api_base_url);
@@ -832,11 +889,7 @@ async fn fetch_available_models(db: State<'_, DatabaseState>) -> Result<Vec<Stri
         .map_err(|e| AuraError::Internal(format!("Failed to parse models response: {}", e)))?;
 
     // Extract model names
-    let mut model_names: Vec<String> = tags_response
-        .models
-        .into_iter()
-        .map(|m| m.name)
-        .collect();
+    let mut model_names: Vec<String> = tags_response.models.into_iter().map(|m| m.name).collect();
 
     // Always include bundled gemma:2b if not already in list
     if !model_names.contains(&"gemma:2b".to_string()) {
@@ -855,19 +908,22 @@ async fn fetch_available_models(db: State<'_, DatabaseState>) -> Result<Vec<Stri
 /// Get GPU acceleration status
 #[tauri::command]
 async fn get_gpu_info(
-    ollama_sidecar: State<'_, Arc<StdMutex<OllamaSidecar>>>
+    ollama_sidecar: State<'_, Arc<StdMutex<OllamaSidecar>>>,
 ) -> Result<ollama_sidecar::GpuInfo, AuraError> {
     log::info!("Tauri command: get_gpu_info called");
 
-    let sidecar = ollama_sidecar.lock()
+    let sidecar = ollama_sidecar
+        .lock()
         .map_err(|e| AuraError::Internal(format!("Failed to lock Ollama sidecar: {}", e)))?;
 
     let gpu_info = sidecar.gpu_info().clone();
 
-    log::info!("GPU Info: backend={}, available={}, device={:?}",
-               gpu_info.backend,
-               gpu_info.available,
-               gpu_info.device_name);
+    log::info!(
+        "GPU Info: backend={}, available={}, device={:?}",
+        gpu_info.backend,
+        gpu_info.available,
+        gpu_info.device_name
+    );
 
     Ok(gpu_info)
 }
@@ -897,7 +953,10 @@ async fn wait_for_ollama_ready(host: &str, timeout_secs: u64) -> Result<(), Stri
 
         match client.get(&api_url).send().await {
             Ok(response) if response.status().is_success() => {
-                log::info!("✓ Ollama server ready (took {:.1}s)", start.elapsed().as_secs_f32());
+                log::info!(
+                    "✓ Ollama server ready (took {:.1}s)",
+                    start.elapsed().as_secs_f32()
+                );
                 return Ok(());
             }
             Ok(response) => {
@@ -916,12 +975,12 @@ async fn wait_for_ollama_ready(host: &str, timeout_secs: u64) -> Result<(), Stri
 // Spotify Music Integration Commands
 // =============================================================================
 
-use spotify_auth::{SpotifyAuth, calculate_token_expiry};
-use spotify_client::{SpotifyClient, SpotifyError, format_track_info, format_currently_playing};
-use music_intent::{MusicIntentParser, MusicIntent};
-use entity_manager::{EntityManager, Entity, EntityFilter};
+use entity_manager::{Entity, EntityFilter, EntityManager};
 use ha_client::HomeAssistantClient;
-use smarthome_intent::{SmartHomeIntentParser, SmartHomeIntent, TemperatureUnit};
+use music_intent::{MusicIntent, MusicIntentParser};
+use smarthome_intent::{SmartHomeIntent, SmartHomeIntentParser, TemperatureUnit};
+use spotify_auth::{calculate_token_expiry, SpotifyAuth};
+use spotify_client::{format_currently_playing, format_track_info, SpotifyClient, SpotifyError};
 
 /// Start Spotify OAuth2 authorization flow
 ///
@@ -932,13 +991,17 @@ async fn spotify_start_auth(
     client_id: String,
     db: State<'_, DatabaseState>,
 ) -> Result<(), AuraError> {
-    log::info!("Starting Spotify authorization for client ID: {}", client_id);
+    log::info!(
+        "Starting Spotify authorization for client ID: {}",
+        client_id
+    );
 
     // Create auth manager
     let auth = SpotifyAuth::new(client_id.clone());
 
     // Start OAuth2 flow (this will block until user authorizes or times out)
-    let token_response = auth.start_authorization()
+    let token_response = auth
+        .start_authorization()
         .await
         .map_err(|e| AuraError::Spotify(e.to_string()))?;
 
@@ -947,24 +1010,24 @@ async fn spotify_start_auth(
         .map_err(|e| AuraError::Secrets(e))?;
 
     if let Some(refresh_token) = &token_response.refresh_token {
-        secrets::save_spotify_refresh_token(refresh_token)
-            .map_err(|e| AuraError::Secrets(e))?;
+        secrets::save_spotify_refresh_token(refresh_token).map_err(|e| AuraError::Secrets(e))?;
     }
 
     // Calculate and save token expiry
     let expiry = calculate_token_expiry(token_response.expires_in);
-    secrets::save_spotify_token_expiry(&expiry)
-        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::save_spotify_token_expiry(&expiry).map_err(|e| AuraError::Secrets(e))?;
 
     // Update database: mark as connected and save client ID
     let database = db.lock().await;
-    let mut settings = database.load_settings()
+    let mut settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
 
     settings.spotify_connected = true;
     settings.spotify_client_id = client_id;
 
-    database.save_settings(&settings)
+    database
+        .save_settings(&settings)
         .map_err(|e| AuraError::Database(e))?;
 
     log::info!("✓ Spotify authorization successful and settings saved");
@@ -980,17 +1043,18 @@ async fn spotify_disconnect(db: State<'_, DatabaseState>) -> Result<(), AuraErro
     log::info!("Disconnecting Spotify");
 
     // Delete tokens from keyring
-    secrets::delete_spotify_tokens()
-        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::delete_spotify_tokens().map_err(|e| AuraError::Secrets(e))?;
 
     // Update database
     let database = db.lock().await;
-    let mut settings = database.load_settings()
+    let mut settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
 
     settings.spotify_connected = false;
 
-    database.save_settings(&settings)
+    database
+        .save_settings(&settings)
         .map_err(|e| AuraError::Database(e))?;
 
     log::info!("✓ Spotify disconnected successfully");
@@ -1008,9 +1072,12 @@ struct SpotifyStatusResponse {
 
 /// Get Spotify connection status
 #[tauri::command]
-async fn spotify_get_status(db: State<'_, DatabaseState>) -> Result<SpotifyStatusResponse, AuraError> {
+async fn spotify_get_status(
+    db: State<'_, DatabaseState>,
+) -> Result<SpotifyStatusResponse, AuraError> {
     let database = db.lock().await;
-    let settings = database.load_settings()
+    let settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
 
     // Verify tokens actually exist in keyring
@@ -1032,12 +1099,14 @@ async fn spotify_save_client_id(
     log::info!("Saving Spotify client ID");
 
     let database = db.lock().await;
-    let mut settings = database.load_settings()
+    let mut settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
 
     settings.spotify_client_id = client_id;
 
-    database.save_settings(&settings)
+    database
+        .save_settings(&settings)
         .map_err(|e| AuraError::Database(e))?;
 
     Ok(())
@@ -1057,13 +1126,15 @@ async fn spotify_handle_music_command(
     // Check if Spotify is connected
     if !secrets::is_spotify_connected() {
         return Err(AuraError::Spotify(
-            "Spotify is not connected. Please connect your Spotify account in Settings.".to_string()
+            "Spotify is not connected. Please connect your Spotify account in Settings."
+                .to_string(),
         ));
     }
 
     // Get client ID from database
     let database = db.lock().await;
-    let settings = database.load_settings()
+    let settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
     drop(database); // Release lock
 
@@ -1071,7 +1142,8 @@ async fn spotify_handle_music_command(
 
     if client_id.is_empty() {
         return Err(AuraError::Spotify(
-            "Spotify client ID not configured. Please enter your client ID in Settings.".to_string()
+            "Spotify client ID not configured. Please enter your client ID in Settings."
+                .to_string(),
         ));
     }
 
@@ -1080,8 +1152,7 @@ async fn spotify_handle_music_command(
     log::info!("Parsed intent: {:?}", intent);
 
     // Create Spotify client
-    let client = SpotifyClient::new(client_id)
-        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+    let client = SpotifyClient::new(client_id).map_err(|e| AuraError::Spotify(e.to_string()))?;
 
     // Handle intent
     match intent {
@@ -1215,7 +1286,8 @@ async fn spotify_control_playback(
     }
 
     let database = db.lock().await;
-    let settings = database.load_settings()
+    let settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
     drop(database);
 
@@ -1224,50 +1296,65 @@ async fn spotify_control_playback(
 
     match action.as_str() {
         "pause" => {
-            client.pause().await
+            client
+                .pause()
+                .await
                 .map_err(|e| AuraError::Spotify(e.to_string()))?;
             Ok("Paused".to_string())
         }
         "resume" | "play" => {
-            client.resume().await
+            client
+                .resume()
+                .await
                 .map_err(|e| AuraError::Spotify(e.to_string()))?;
             Ok("Resumed".to_string())
         }
         "next" => {
-            client.next().await
+            client
+                .next()
+                .await
                 .map_err(|e| AuraError::Spotify(e.to_string()))?;
             Ok("Next track".to_string())
         }
         "previous" => {
-            client.previous().await
+            client
+                .previous()
+                .await
                 .map_err(|e| AuraError::Spotify(e.to_string()))?;
             Ok("Previous track".to_string())
         }
-        _ => Err(AuraError::Spotify(format!("Unknown playback action: {}", action)))
+        _ => Err(AuraError::Spotify(format!(
+            "Unknown playback action: {}",
+            action
+        ))),
     }
 }
 
 /// Get currently playing track info
 #[tauri::command]
-async fn spotify_get_current_track(db: State<'_, DatabaseState>) -> Result<serde_json::Value, AuraError> {
+async fn spotify_get_current_track(
+    db: State<'_, DatabaseState>,
+) -> Result<serde_json::Value, AuraError> {
     if !secrets::is_spotify_connected() {
         return Err(AuraError::Spotify("Spotify not connected".to_string()));
     }
 
     let database = db.lock().await;
-    let settings = database.load_settings()
+    let settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
     drop(database);
 
     let client = SpotifyClient::new(settings.spotify_client_id)
         .map_err(|e| AuraError::Spotify(e.to_string()))?;
 
-    let current = client.get_current_track().await
+    let current = client
+        .get_current_track()
+        .await
         .map_err(|e| AuraError::Spotify(e.to_string()))?;
 
     // Serialize to JSON for frontend
-    serde_json::to_value(&current)
-        .map_err(|e| AuraError::Serialization(e))
+    serde_json::to_value(&current).map_err(|e| AuraError::Serialization(e))
 }
 
 /// Get available Spotify Connect devices
@@ -1278,19 +1365,21 @@ async fn spotify_get_devices(db: State<'_, DatabaseState>) -> Result<serde_json:
     }
 
     let database = db.lock().await;
-    let settings = database.load_settings()
+    let settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
     drop(database);
 
     let client = SpotifyClient::new(settings.spotify_client_id)
         .map_err(|e| AuraError::Spotify(e.to_string()))?;
 
-    let devices = client.get_devices().await
+    let devices = client
+        .get_devices()
+        .await
         .map_err(|e| AuraError::Spotify(e.to_string()))?;
 
     // Serialize to JSON for frontend
-    serde_json::to_value(&devices)
-        .map_err(|e| AuraError::Serialization(e))
+    serde_json::to_value(&devices).map_err(|e| AuraError::Serialization(e))
 }
 
 // =============================================================================
@@ -1332,7 +1421,9 @@ async fn ha_connect(
     );
 
     // Connect and authenticate
-    client.connect().await
+    client
+        .connect()
+        .await
         .map_err(|e| AuraError::HomeAssistant(e))?;
 
     // Store client in state
@@ -1341,18 +1432,19 @@ async fn ha_connect(
     drop(ha_client_lock);
 
     // Save token to keyring
-    secrets::save_ha_access_token(&token)
-        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::save_ha_access_token(&token).map_err(|e| AuraError::Secrets(e))?;
 
     // Update database settings
     let database = db.lock().await;
-    let mut settings = database.load_settings()
+    let mut settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
 
     settings.ha_connected = true;
     settings.ha_base_url = base_url;
 
-    database.save_settings(&settings)
+    database
+        .save_settings(&settings)
         .map_err(|e| AuraError::Database(e))?;
 
     log::info!("✓ Successfully connected to Home Assistant");
@@ -1377,18 +1469,19 @@ async fn ha_disconnect(
     drop(ha_client_lock);
 
     // Delete token from keyring
-    secrets::delete_ha_access_token()
-        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::delete_ha_access_token().map_err(|e| AuraError::Secrets(e))?;
 
     // Update database settings
     let database = db.lock().await;
-    let mut settings = database.load_settings()
+    let mut settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
 
     settings.ha_connected = false;
     settings.ha_base_url = String::new();
 
-    database.save_settings(&settings)
+    database
+        .save_settings(&settings)
         .map_err(|e| AuraError::Database(e))?;
 
     log::info!("✓ Disconnected from Home Assistant");
@@ -1404,11 +1497,13 @@ async fn ha_get_status(
     entity_manager: State<'_, EntityManagerState>,
 ) -> Result<HAStatusResponse, AuraError> {
     let ha_client_lock = ha_client_state.lock().await;
-    let connected = ha_client_lock.is_some() && ha_client_lock.as_ref().unwrap().is_connected().await;
+    let connected =
+        ha_client_lock.is_some() && ha_client_lock.as_ref().unwrap().is_connected().await;
     drop(ha_client_lock);
 
     let database = db.lock().await;
-    let settings = database.load_settings()
+    let settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
     drop(database);
 
@@ -1462,12 +1557,16 @@ async fn ha_call_service(
     let ha_client_lock = ha_client_state.lock().await;
 
     if let Some(client) = ha_client_lock.as_ref() {
-        client.call_service(&domain, &service, &entity_id, data).await
+        client
+            .call_service(&domain, &service, &entity_id, data)
+            .await
             .map_err(|e| AuraError::HomeAssistant(e))?;
 
         Ok(format!("✓ Called {}.{} on {}", domain, service, entity_id))
     } else {
-        Err(AuraError::HomeAssistant("Not connected to Home Assistant".to_string()))
+        Err(AuraError::HomeAssistant(
+            "Not connected to Home Assistant".to_string(),
+        ))
     }
 }
 
@@ -1491,7 +1590,9 @@ async fn ha_handle_smart_home_command(
     // Check if connected
     let ha_client_lock = ha_client_state.lock().await;
     if ha_client_lock.is_none() {
-        return Err(AuraError::HomeAssistant("Not connected to Home Assistant".to_string()));
+        return Err(AuraError::HomeAssistant(
+            "Not connected to Home Assistant".to_string(),
+        ));
     }
 
     let client = ha_client_lock.as_ref().unwrap();
@@ -1759,16 +1860,16 @@ async fn ha_handle_smart_home_command(
 
 /// Dismiss the Home Assistant onboarding guide
 #[tauri::command]
-async fn ha_dismiss_onboarding(
-    db: State<'_, DatabaseState>,
-) -> Result<(), AuraError> {
+async fn ha_dismiss_onboarding(db: State<'_, DatabaseState>) -> Result<(), AuraError> {
     let database = db.lock().await;
-    let mut settings = database.load_settings()
+    let mut settings = database
+        .load_settings()
         .map_err(|e| AuraError::Database(e))?;
 
     settings.ha_onboarding_dismissed = true;
 
-    database.save_settings(&settings)
+    database
+        .save_settings(&settings)
         .map_err(|e| AuraError::Database(e))?;
 
     log::info!("✓ Home Assistant onboarding dismissed");
@@ -1786,21 +1887,19 @@ pub fn run() {
     // Initialize database
     log::info!("Initializing database...");
     let database = match get_database_path() {
-        Ok(db_path) => {
-            match Database::new(db_path) {
-                Ok(db) => {
-                    let conv_count = db.count_conversations().unwrap_or(0);
-                    let msg_count = db.count_messages().unwrap_or(0);
-                    log::info!("✓ Database initialized successfully");
-                    log::info!("  - {} conversations, {} messages", conv_count, msg_count);
-                    Arc::new(TokioMutex::new(db))
-                }
-                Err(e) => {
-                    log::error!("✗ Failed to initialize database: {}", e);
-                    panic!("Cannot start without database. Error: {}", e);
-                }
+        Ok(db_path) => match Database::new(db_path) {
+            Ok(db) => {
+                let conv_count = db.count_conversations().unwrap_or(0);
+                let msg_count = db.count_messages().unwrap_or(0);
+                log::info!("✓ Database initialized successfully");
+                log::info!("  - {} conversations, {} messages", conv_count, msg_count);
+                Arc::new(TokioMutex::new(db))
             }
-        }
+            Err(e) => {
+                log::error!("✗ Failed to initialize database: {}", e);
+                panic!("Cannot start without database. Error: {}", e);
+            }
+        },
         Err(e) => {
             log::error!("✗ Failed to get database path: {}", e);
             panic!("Cannot start without database. Error: {}", e);
@@ -1850,7 +1949,7 @@ pub fn run() {
         settings.api_base_url.clone(),
         settings.model_name.clone(),
         api_key.clone(),
-        None
+        None,
     ) {
         Ok(llm) => {
             log::info!("✓ LLM engine initialized successfully");
@@ -1858,12 +1957,21 @@ pub fn run() {
             log::info!("  - API Base URL: {}", info.api_base_url);
             log::info!("  - Model: {}", info.model_name);
             log::info!("  - System prompt: {}", info.system_prompt);
-            log::info!("  - API Key: {}", if api_key.is_some() { "provided" } else { "not provided" });
+            log::info!(
+                "  - API Key: {}",
+                if api_key.is_some() {
+                    "provided"
+                } else {
+                    "not provided"
+                }
+            );
             Arc::new(TokioMutex::new(llm))
         }
         Err(e) => {
             log::error!("✗ Failed to initialize LLM engine: {}", e);
-            log::error!("  Make sure you have configured the API Base URL and Model Name in settings");
+            log::error!(
+                "  Make sure you have configured the API Base URL and Model Name in settings"
+            );
             log::error!("  Example: Ollama at http://localhost:11434/v1 with model 'llama3'");
             panic!("Cannot start without LLM configuration. Error: {}", e);
         }

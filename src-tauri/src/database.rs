@@ -1,4 +1,4 @@
-use rusqlite::{Connection, Result as SqlResult, params};
+use rusqlite::{params, Connection, Result as SqlResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,33 +25,33 @@ pub struct Message {
 /// Represents application settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    pub llm_provider: String,      // "local" or "api" (kept for backward compatibility)
-    pub server_address: String,    // Remote server address for gRPC (legacy field)
-    pub wake_word_enabled: bool,   // Enable/disable wake word detection
-    pub api_base_url: String,      // Base URL for OpenAI-compatible API (e.g., "http://localhost:1234/v1")
-    pub model_name: String,        // Model name to use (e.g., "llama3", "phi3:instruct")
-    pub vad_sensitivity: f32,      // Voice activity detection sensitivity (RMS energy threshold, 0.0-1.0)
-    pub vad_timeout_ms: u32,       // Silence timeout in milliseconds before ending recording
-    pub stt_model_name: String,    // STT (Whisper) model filename (e.g., "ggml-base.en.bin", "ggml-small.en.bin")
-    pub voice_preference: String,  // TTS voice preference ("male" or "female", maps to lessac-medium or amy-medium)
+    pub llm_provider: String, // "local" or "api" (kept for backward compatibility)
+    pub server_address: String, // Remote server address for gRPC (legacy field)
+    pub wake_word_enabled: bool, // Enable/disable wake word detection
+    pub api_base_url: String, // Base URL for OpenAI-compatible API (e.g., "http://localhost:1234/v1")
+    pub model_name: String,   // Model name to use (e.g., "llama3", "phi3:instruct")
+    pub vad_sensitivity: f32, // Voice activity detection sensitivity (RMS energy threshold, 0.0-1.0)
+    pub vad_timeout_ms: u32,  // Silence timeout in milliseconds before ending recording
+    pub stt_model_name: String, // STT (Whisper) model filename (e.g., "ggml-base.en.bin", "ggml-small.en.bin")
+    pub voice_preference: String, // TTS voice preference ("male" or "female", maps to lessac-medium or amy-medium)
 
     // RAG / Online Mode Settings
-    pub online_mode_enabled: bool,          // Enable/disable web search for RAG (default: false, requires explicit opt-in)
-    pub search_backend: String,             // "searxng" or "brave" (default: "searxng")
-    pub searxng_instance_url: String,       // SearXNG instance URL (default: "https://searx.be")
+    pub online_mode_enabled: bool, // Enable/disable web search for RAG (default: false, requires explicit opt-in)
+    pub search_backend: String,    // "searxng" or "brave" (default: "searxng")
+    pub searxng_instance_url: String, // SearXNG instance URL (default: "https://searx.be")
     pub brave_search_api_key: Option<String>, // Brave Search API key (optional, stored in OS keyring)
-    pub max_search_results: u32,            // Maximum number of search results to use (1-20, default: 5)
+    pub max_search_results: u32, // Maximum number of search results to use (1-20, default: 5)
 
     // Spotify Music Integration Settings
-    pub spotify_connected: bool,            // Whether Spotify is connected (has valid tokens in keyring)
-    pub spotify_client_id: String,          // Spotify app client ID (user-provided from developer dashboard)
-    pub spotify_auto_play_enabled: bool,    // Auto-play music via voice commands (default: true)
+    pub spotify_connected: bool, // Whether Spotify is connected (has valid tokens in keyring)
+    pub spotify_client_id: String, // Spotify app client ID (user-provided from developer dashboard)
+    pub spotify_auto_play_enabled: bool, // Auto-play music via voice commands (default: true)
 
     // Home Assistant Integration Settings
-    pub ha_connected: bool,                 // Whether Home Assistant is connected (has valid token in keyring)
-    pub ha_base_url: String,                // Home Assistant base URL (e.g., "http://homeassistant.local:8123")
-    pub ha_auto_sync: bool,                 // Auto-sync entities on connect (default: true)
-    pub ha_onboarding_dismissed: bool,      // Whether user has dismissed the onboarding guide
+    pub ha_connected: bool, // Whether Home Assistant is connected (has valid token in keyring)
+    pub ha_base_url: String, // Home Assistant base URL (e.g., "http://homeassistant.local:8123")
+    pub ha_auto_sync: bool, // Auto-sync entities on connect (default: true)
+    pub ha_onboarding_dismissed: bool, // Whether user has dismissed the onboarding guide
 }
 
 /// Database manager for Aura Desktop
@@ -72,8 +72,8 @@ impl Database {
                 .map_err(|e| format!("Failed to create database directory: {}", e))?;
         }
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| format!("Failed to open database: {}", e))?;
+        let conn =
+            Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
         let db = Database { conn };
 
@@ -415,7 +415,10 @@ impl Database {
     ) -> Result<i64, String> {
         // Validate role
         if role != "user" && role != "assistant" {
-            return Err(format!("Invalid role: {}. Must be 'user' or 'assistant'", role));
+            return Err(format!(
+                "Invalid role: {}. Must be 'user' or 'assistant'",
+                role
+            ));
         }
 
         self.conn
@@ -438,7 +441,11 @@ impl Database {
     }
 
     /// Update conversation title
-    pub fn update_conversation_title(&self, conversation_id: i64, title: &str) -> Result<(), String> {
+    pub fn update_conversation_title(
+        &self,
+        conversation_id: i64,
+        title: &str,
+    ) -> Result<(), String> {
         self.conn
             .execute(
                 "UPDATE conversations SET title = ?1 WHERE id = ?2",
@@ -446,7 +453,11 @@ impl Database {
             )
             .map_err(|e| format!("Failed to update conversation title: {}", e))?;
 
-        log::info!("Updated conversation {} title to: {}", conversation_id, title);
+        log::info!(
+            "Updated conversation {} title to: {}",
+            conversation_id,
+            title
+        );
 
         Ok(())
     }
@@ -738,7 +749,11 @@ impl Database {
             )
             .map_err(|e| format!("Failed to save server_address: {}", e))?;
 
-        let wake_word_enabled_str = if settings.wake_word_enabled { "true" } else { "false" };
+        let wake_word_enabled_str = if settings.wake_word_enabled {
+            "true"
+        } else {
+            "false"
+        };
         self.conn
             .execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'wake_word_enabled'",
@@ -789,7 +804,11 @@ impl Database {
             .map_err(|e| format!("Failed to save voice_preference: {}", e))?;
 
         // Save RAG / Online Mode settings
-        let online_mode_enabled_str = if settings.online_mode_enabled { "true" } else { "false" };
+        let online_mode_enabled_str = if settings.online_mode_enabled {
+            "true"
+        } else {
+            "false"
+        };
         self.conn
             .execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'online_mode_enabled'",
@@ -821,7 +840,11 @@ impl Database {
         // Note: brave_search_api_key is stored in OS keyring, not database
 
         // Save Spotify Music Integration settings
-        let spotify_connected_str = if settings.spotify_connected { "true" } else { "false" };
+        let spotify_connected_str = if settings.spotify_connected {
+            "true"
+        } else {
+            "false"
+        };
         self.conn
             .execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'spotify_connected'",
@@ -836,7 +859,11 @@ impl Database {
             )
             .map_err(|e| format!("Failed to save spotify_client_id: {}", e))?;
 
-        let spotify_auto_play_enabled_str = if settings.spotify_auto_play_enabled { "true" } else { "false" };
+        let spotify_auto_play_enabled_str = if settings.spotify_auto_play_enabled {
+            "true"
+        } else {
+            "false"
+        };
         self.conn
             .execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'spotify_auto_play_enabled'",
@@ -845,7 +872,11 @@ impl Database {
             .map_err(|e| format!("Failed to save spotify_auto_play_enabled: {}", e))?;
 
         // Save Home Assistant Integration settings
-        let ha_connected_str = if settings.ha_connected { "true" } else { "false" };
+        let ha_connected_str = if settings.ha_connected {
+            "true"
+        } else {
+            "false"
+        };
         self.conn
             .execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'ha_connected'",
@@ -860,7 +891,11 @@ impl Database {
             )
             .map_err(|e| format!("Failed to save ha_base_url: {}", e))?;
 
-        let ha_auto_sync_str = if settings.ha_auto_sync { "true" } else { "false" };
+        let ha_auto_sync_str = if settings.ha_auto_sync {
+            "true"
+        } else {
+            "false"
+        };
         self.conn
             .execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'ha_auto_sync'",
@@ -868,7 +903,11 @@ impl Database {
             )
             .map_err(|e| format!("Failed to save ha_auto_sync: {}", e))?;
 
-        let ha_onboarding_dismissed_str = if settings.ha_onboarding_dismissed { "true" } else { "false" };
+        let ha_onboarding_dismissed_str = if settings.ha_onboarding_dismissed {
+            "true"
+        } else {
+            "false"
+        };
         self.conn
             .execute(
                 "UPDATE settings SET value = ?1 WHERE key = 'ha_onboarding_dismissed'",
@@ -923,8 +962,7 @@ pub fn get_database_path() -> Result<PathBuf, String> {
     // For production, this should use Tauri's app data directory
 
     // Try to get the app data directory
-    let mut db_path = dirs::data_local_dir()
-        .ok_or("Failed to get local data directory")?;
+    let mut db_path = dirs::data_local_dir().ok_or("Failed to get local data directory")?;
 
     db_path.push("com.nivora.aura-desktop");
     db_path.push("aura_storage.db");
@@ -954,7 +992,9 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let db = Database::new(temp_file.path().to_path_buf()).unwrap();
 
-        let id = db.create_conversation(Some("Test Chat".to_string())).unwrap();
+        let id = db
+            .create_conversation(Some("Test Chat".to_string()))
+            .unwrap();
         assert!(id > 0);
 
         let conversations = db.load_conversations().unwrap();

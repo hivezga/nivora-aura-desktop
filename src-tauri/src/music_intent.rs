@@ -4,8 +4,8 @@
 // It supports both regex-based pattern matching and optional LLM-based parsing for
 // more sophisticated command understanding.
 
-use regex::Regex;
 use once_cell::sync::Lazy;
+use regex::Regex;
 
 /// Music command intent types
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,14 +17,10 @@ pub enum MusicIntent {
     },
 
     /// Play a user's playlist by name
-    PlayPlaylist {
-        playlist_name: String,
-    },
+    PlayPlaylist { playlist_name: String },
 
     /// Play music by a specific artist (top tracks)
-    PlayArtist {
-        artist: String,
-    },
+    PlayArtist { artist: String },
 
     /// Pause current playback
     Pause,
@@ -49,17 +45,13 @@ pub enum MusicIntent {
 pub struct MusicIntentParser;
 
 // Compiled regex patterns (initialized once)
-static RE_PLAY_SONG_WITH_ARTIST: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)play\s+(.+?)\s+by\s+(.+)").unwrap()
-});
+static RE_PLAY_SONG_WITH_ARTIST: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)play\s+(.+?)\s+by\s+(.+)").unwrap());
 
-static RE_PLAY_PLAYLIST: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)play\s+(?:my\s+)?(.+?)\s+playlist").unwrap()
-});
+static RE_PLAY_PLAYLIST: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)play\s+(?:my\s+)?(.+?)\s+playlist").unwrap());
 
-static RE_PLAY_SONG_OR_ARTIST: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)play\s+(.+)").unwrap()
-});
+static RE_PLAY_SONG_OR_ARTIST: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)play\s+(.+)").unwrap());
 
 impl MusicIntentParser {
     /// Parse a natural language music command into a structured intent
@@ -138,15 +130,23 @@ impl MusicIntentParser {
         matches!(
             text,
             "pause" | "stop" | "pause music" | "stop music" | "pause the music" | "stop the music"
-        ) || text.starts_with("pause ") || text.starts_with("stop ")
+        ) || text.starts_with("pause ")
+            || text.starts_with("stop ")
     }
 
     /// Check if the command is a resume command
     fn is_resume_command(text: &str) -> bool {
         matches!(
             text,
-            "resume" | "continue" | "unpause" | "play" | "resume music" | "continue music" | "unpause music"
-        ) || text.starts_with("resume ") || text.starts_with("continue ")
+            "resume"
+                | "continue"
+                | "unpause"
+                | "play"
+                | "resume music"
+                | "continue music"
+                | "unpause music"
+        ) || text.starts_with("resume ")
+            || text.starts_with("continue ")
     }
 
     /// Check if the command is a next track command
@@ -161,7 +161,13 @@ impl MusicIntentParser {
     fn is_previous_command(text: &str) -> bool {
         matches!(
             text,
-            "previous" | "back" | "previous song" | "go back" | "previous track" | "last song" | "last track"
+            "previous"
+                | "back"
+                | "previous song"
+                | "go back"
+                | "previous track"
+                | "last song"
+                | "last track"
         )
     }
 
@@ -173,11 +179,9 @@ impl MusicIntentParser {
 
     /// Extract playlist name from command
     fn extract_playlist(text: &str) -> Option<String> {
-        RE_PLAY_PLAYLIST.captures(text).and_then(|caps| {
-            caps.get(1).map(|m| {
-                Self::title_case(m.as_str().trim())
-            })
-        })
+        RE_PLAY_PLAYLIST
+            .captures(text)
+            .and_then(|caps| caps.get(1).map(|m| Self::title_case(m.as_str().trim())))
     }
 
     /// Extract song name and artist from command
@@ -186,10 +190,7 @@ impl MusicIntentParser {
             let song = caps.get(1)?.as_str().trim();
             let artist = caps.get(2)?.as_str().trim();
 
-            Some((
-                Self::title_case(song),
-                Some(Self::title_case(artist)),
-            ))
+            Some((Self::title_case(song), Some(Self::title_case(artist))))
         })
     }
 
@@ -236,9 +237,7 @@ impl MusicIntentParser {
                 let mut chars = word.chars();
                 match chars.next() {
                     None => String::new(),
-                    Some(first) => {
-                        first.to_uppercase().collect::<String>() + chars.as_str()
-                    }
+                    Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
                 }
             })
             .collect::<Vec<_>>()
@@ -313,7 +312,10 @@ mod tests {
         assert_eq!(MusicIntentParser::parse("pause"), MusicIntent::Pause);
         assert_eq!(MusicIntentParser::parse("stop"), MusicIntent::Pause);
         assert_eq!(MusicIntentParser::parse("pause music"), MusicIntent::Pause);
-        assert_eq!(MusicIntentParser::parse("stop the music"), MusicIntent::Pause);
+        assert_eq!(
+            MusicIntentParser::parse("stop the music"),
+            MusicIntent::Pause
+        );
     }
 
     #[test]
@@ -363,10 +365,7 @@ mod tests {
 
     #[test]
     fn test_title_case() {
-        assert_eq!(
-            MusicIntentParser::title_case("hello world"),
-            "Hello World"
-        );
+        assert_eq!(MusicIntentParser::title_case("hello world"), "Hello World");
         assert_eq!(
             MusicIntentParser::title_case("the quick brown fox"),
             "The Quick Brown Fox"

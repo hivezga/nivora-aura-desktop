@@ -70,7 +70,14 @@ impl LLMEngine {
         log::info!("Initializing LLM engine (OpenAI-compatible API)");
         log::info!("  API Base URL: {}", api_base_url);
         log::info!("  Model: {}", model_name);
-        log::info!("  API Key: {}", if api_key.is_some() { "provided" } else { "not provided" });
+        log::info!(
+            "  API Key: {}",
+            if api_key.is_some() {
+                "provided"
+            } else {
+                "not provided"
+            }
+        );
 
         // Validate base URL format
         if !api_base_url.starts_with("http://") && !api_base_url.starts_with("https://") {
@@ -134,7 +141,10 @@ impl LLMEngine {
         };
 
         // Construct the full endpoint URL
-        let endpoint = format!("{}/chat/completions", self.api_base_url.trim_end_matches('/'));
+        let endpoint = format!(
+            "{}/chat/completions",
+            self.api_base_url.trim_end_matches('/')
+        );
 
         log::info!("Sending request to: {}", endpoint);
         log::debug!("Request payload: {:?}", request);
@@ -155,31 +165,30 @@ impl LLMEngine {
             }
 
             // Send request
-            let response = http_request
-                .send()
-                .await
-                .map_err(|e| {
-                    format!(
-                        "Failed to connect to LLM API at {}: {}. Make sure your AI server is running.",
-                        endpoint_clone, e
-                    )
-                })?;
+            let response = http_request.send().await.map_err(|e| {
+                format!(
+                    "Failed to connect to LLM API at {}: {}. Make sure your AI server is running.",
+                    endpoint_clone, e
+                )
+            })?;
 
             // Check for HTTP errors
             if !response.status().is_success() {
                 let status = response.status();
-                let error_body = response.text().await.unwrap_or_else(|_| "Unable to read error body".to_string());
-                return Err(format!(
-                    "LLM API returned error {}: {}",
-                    status, error_body
-                ));
+                let error_body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|_| "Unable to read error body".to_string());
+                return Err(format!("LLM API returned error {}: {}", status, error_body));
             }
 
             // Parse response
-            let completion: ChatCompletionResponse = response
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse API response: {}. Make sure the server is OpenAI-compatible.", e))?;
+            let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
+                format!(
+                    "Failed to parse API response: {}. Make sure the server is OpenAI-compatible.",
+                    e
+                )
+            })?;
 
             // Extract the assistant's message
             let assistant_message = completion
@@ -298,12 +307,7 @@ mod tests {
 
     #[test]
     fn test_invalid_url() {
-        let engine = LLMEngine::new(
-            "invalid-url".to_string(),
-            "llama3".to_string(),
-            None,
-            None,
-        );
+        let engine = LLMEngine::new("invalid-url".to_string(), "llama3".to_string(), None, None);
         assert!(engine.is_err());
     }
 }

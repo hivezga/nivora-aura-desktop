@@ -13,23 +13,23 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::StreamConfig;
+use log::{debug, error, info, warn};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
-use log::{info, error, warn, debug};
-use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 // Audio configuration constants
-const SAMPLE_RATE: u32 = 16000;  // Required by whisper-rs
-const CHANNELS: u16 = 1;         // Mono audio
-const CHUNK_SIZE: usize = 512;   // Process in small chunks for responsiveness
+const SAMPLE_RATE: u32 = 16000; // Required by whisper-rs
+const CHANNELS: u16 = 1; // Mono audio
+const CHUNK_SIZE: usize = 512; // Process in small chunks for responsiveness
 
 // VAD (Voice Activity Detection) constants
-const VOICE_FRAMES_REQUIRED: usize = 10;     // Require consistent voice energy for wake word
-const MAX_RECORDING_SECONDS: usize = 30;     // Maximum 30 seconds per transcription
+const VOICE_FRAMES_REQUIRED: usize = 10; // Require consistent voice energy for wake word
+const MAX_RECORDING_SECONDS: usize = 30; // Maximum 30 seconds per transcription
 const SKIP_FRAMES_AFTER_WAKE_WORD: usize = 15; // Skip ~500ms of audio after wake word to prevent capturing it
-const MIN_RECORDING_FRAMES: usize = 30;      // Minimum 30 frames (~1 second) before allowing silence detection
+const MIN_RECORDING_FRAMES: usize = 30; // Minimum 30 frames (~1 second) before allowing silence detection
 
 /// Voice pipeline state machine
 ///
@@ -51,25 +51,25 @@ pub enum VoiceState {
 pub struct NativeVoicePipeline {
     app_handle: AppHandle,
     model_path: PathBuf,
-    stt_model_name: String,                  // STT model filename (e.g., "ggml-base.en.bin")
+    stt_model_name: String, // STT model filename (e.g., "ggml-base.en.bin")
 
     // State machine (thread-safe, accessible from both audio thread and command handlers)
     state: Arc<Mutex<VoiceState>>,
 
     // Audio stream control
-    wake_word_active: Arc<AtomicBool>,       // Set to false to stop the entire audio loop
+    wake_word_active: Arc<AtomicBool>, // Set to false to stop the entire audio loop
 
     // Recording buffers and signals
-    recording_buffer: Arc<Mutex<Vec<f32>>>,  // Dedicated buffer for active recordings
-    recording_complete: Arc<AtomicBool>,     // Signal when recording finished (silence detected)
-    skip_frames_counter: Arc<AtomicUsize>,   // Skip N frames after transitioning to prevent wake word capture
+    recording_buffer: Arc<Mutex<Vec<f32>>>, // Dedicated buffer for active recordings
+    recording_complete: Arc<AtomicBool>,    // Signal when recording finished (silence detected)
+    skip_frames_counter: Arc<AtomicUsize>, // Skip N frames after transitioning to prevent wake word capture
 
     // Wake word detection
-    voice_detected: Arc<AtomicBool>,         // Track if voice activity detected for wake word
+    voice_detected: Arc<AtomicBool>, // Track if voice activity detected for wake word
 
     // VAD Configuration (shared with audio thread via Arc<Mutex>)
-    vad_sensitivity: Arc<Mutex<f32>>,        // Voice energy threshold (0.0-1.0), controls microphone sensitivity
-    vad_timeout_ms: Arc<Mutex<u32>>,         // Silence timeout in milliseconds before ending recording
+    vad_sensitivity: Arc<Mutex<f32>>, // Voice energy threshold (0.0-1.0), controls microphone sensitivity
+    vad_timeout_ms: Arc<Mutex<u32>>,  // Silence timeout in milliseconds before ending recording
 }
 
 /// Service status for frontend
@@ -97,7 +97,9 @@ impl NativeVoicePipeline {
             stt_model_name,
             state: Arc::new(Mutex::new(VoiceState::Idle)),
             wake_word_active: Arc::new(AtomicBool::new(false)),
-            recording_buffer: Arc::new(Mutex::new(Vec::with_capacity(SAMPLE_RATE as usize * MAX_RECORDING_SECONDS))),
+            recording_buffer: Arc::new(Mutex::new(Vec::with_capacity(
+                SAMPLE_RATE as usize * MAX_RECORDING_SECONDS,
+            ))),
             recording_complete: Arc::new(AtomicBool::new(false)),
             skip_frames_counter: Arc::new(AtomicUsize::new(0)),
             voice_detected: Arc::new(AtomicBool::new(false)),
@@ -123,7 +125,9 @@ impl NativeVoicePipeline {
 
         // Set initial state to ListeningForWakeWord
         {
-            let mut state = self.state.lock()
+            let mut state = self
+                .state
+                .lock()
                 .map_err(|e| format!("Failed to lock state: {}", e))?;
             *state = VoiceState::ListeningForWakeWord;
             info!("Voice state: Idle -> ListeningForWakeWord");
@@ -407,12 +411,17 @@ impl NativeVoicePipeline {
 
         // STATE TRANSITION: Move to Transcribing state (with guard against concurrent calls)
         {
-            let mut state = self.state.lock()
+            let mut state = self
+                .state
+                .lock()
                 .map_err(|e| format!("Failed to lock state: {}", e))?;
 
             // Guard: Don't allow transcription if already transcribing
             if *state == VoiceState::Transcribing {
-                return Err("Already transcribing - please wait for current recording to complete".to_string());
+                return Err(
+                    "Already transcribing - please wait for current recording to complete"
+                        .to_string(),
+                );
             }
 
             let prev_state = *state;
@@ -431,7 +440,8 @@ impl NativeVoicePipeline {
         self.voice_detected.store(false, Ordering::Relaxed);
 
         // Set skip counter to discard initial frames and prevent wake word capture
-        self.skip_frames_counter.store(SKIP_FRAMES_AFTER_WAKE_WORD, Ordering::Relaxed);
+        self.skip_frames_counter
+            .store(SKIP_FRAMES_AFTER_WAKE_WORD, Ordering::Relaxed);
         info!("Recording started - speak now...");
         debug!(
             "Recording config: skip_frames={}, min_frames={}, vad_sensitivity={:.4}, vad_timeout_ms={}",
@@ -464,7 +474,9 @@ impl NativeVoicePipeline {
 
         // STATE TRANSITION: Return to ListeningForWakeWord
         {
-            let mut state = self.state.lock()
+            let mut state = self
+                .state
+                .lock()
                 .map_err(|e| format!("Failed to lock state: {}", e))?;
             *state = VoiceState::ListeningForWakeWord;
             info!("Voice state: Transcribing -> ListeningForWakeWord");
@@ -538,14 +550,19 @@ impl NativeVoicePipeline {
     }
 
     /// Transcribe audio samples using Whisper
-    fn transcribe_with_whisper(&self, samples: &[f32], model_path: &PathBuf) -> Result<String, String> {
+    fn transcribe_with_whisper(
+        &self,
+        samples: &[f32],
+        model_path: &PathBuf,
+    ) -> Result<String, String> {
         info!("Initializing Whisper for transcription...");
 
         // Load Whisper model
         let ctx = WhisperContext::new_with_params(
             model_path.to_str().unwrap(),
-            WhisperContextParameters::default()
-        ).map_err(|e| format!("Failed to load Whisper model: {}", e))?;
+            WhisperContextParameters::default(),
+        )
+        .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
 
         // Configure transcription parameters
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -558,12 +575,14 @@ impl NativeVoicePipeline {
         params.set_print_timestamps(false);
 
         // Create Whisper state
-        let mut state = ctx.create_state()
+        let mut state = ctx
+            .create_state()
             .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
 
         // Run transcription
         info!("Running Whisper transcription...");
-        state.full(params, samples)
+        state
+            .full(params, samples)
             .map_err(|e| format!("Whisper transcription failed: {}", e))?;
 
         // Extract transcribed text
@@ -572,7 +591,8 @@ impl NativeVoicePipeline {
         let mut transcription = String::new();
         for i in 0..num_segments {
             if let Some(segment) = state.get_segment(i) {
-                let text = segment.to_str()
+                let text = segment
+                    .to_str()
                     .map_err(|e| format!("Failed to get segment {} text: {}", i, e))?;
                 transcription.push_str(text);
                 transcription.push(' ');
@@ -595,27 +615,40 @@ impl NativeVoicePipeline {
     /// This allows the user to tune the microphone sensitivity and silence timeout
     /// without restarting the application
     pub fn update_vad_settings(&self, sensitivity: f32, timeout_ms: u32) -> Result<(), String> {
-        info!("Updating VAD settings: sensitivity={}, timeout_ms={}", sensitivity, timeout_ms);
+        info!(
+            "Updating VAD settings: sensitivity={}, timeout_ms={}",
+            sensitivity, timeout_ms
+        );
 
         // Validate sensitivity range
         if !(0.001..=1.0).contains(&sensitivity) {
-            return Err(format!("Invalid sensitivity: {}. Must be between 0.001 and 1.0", sensitivity));
+            return Err(format!(
+                "Invalid sensitivity: {}. Must be between 0.001 and 1.0",
+                sensitivity
+            ));
         }
 
         // Validate timeout range (minimum 100ms, maximum 10 seconds)
         if !(100..=10000).contains(&timeout_ms) {
-            return Err(format!("Invalid timeout: {}ms. Must be between 100ms and 10000ms", timeout_ms));
+            return Err(format!(
+                "Invalid timeout: {}ms. Must be between 100ms and 10000ms",
+                timeout_ms
+            ));
         }
 
         // Update settings
         {
-            let mut sens = self.vad_sensitivity.lock()
+            let mut sens = self
+                .vad_sensitivity
+                .lock()
                 .map_err(|e| format!("Failed to lock vad_sensitivity: {}", e))?;
             *sens = sensitivity;
         }
 
         {
-            let mut timeout = self.vad_timeout_ms.lock()
+            let mut timeout = self
+                .vad_timeout_ms
+                .lock()
                 .map_err(|e| format!("Failed to lock vad_timeout_ms: {}", e))?;
             *timeout = timeout_ms;
         }
@@ -629,7 +662,9 @@ impl NativeVoicePipeline {
     /// This is used to control the state machine from external commands.
     /// Key use case: Setting to Speaking when TTS starts to prevent feedback loop.
     pub fn set_state(&self, new_state: VoiceState) -> Result<(), String> {
-        let mut state = self.state.lock()
+        let mut state = self
+            .state
+            .lock()
             .map_err(|e| format!("Failed to lock state: {}", e))?;
 
         let prev_state = *state;
@@ -641,7 +676,9 @@ impl NativeVoicePipeline {
 
     /// Get the current voice pipeline state
     pub fn get_state(&self) -> Result<VoiceState, String> {
-        let state = self.state.lock()
+        let state = self
+            .state
+            .lock()
             .map_err(|e| format!("Failed to lock state: {}", e))?;
         Ok(*state)
     }
@@ -660,18 +697,25 @@ impl NativeVoicePipeline {
 
         // Clear recording buffer
         {
-            let mut buffer = self.recording_buffer.lock()
+            let mut buffer = self
+                .recording_buffer
+                .lock()
                 .map_err(|e| format!("Failed to lock recording buffer: {}", e))?;
             buffer.clear();
         }
 
         // STATE TRANSITION: Force reset to ListeningForWakeWord
         {
-            let mut state = self.state.lock()
+            let mut state = self
+                .state
+                .lock()
                 .map_err(|e| format!("Failed to lock state: {}", e))?;
             let prev_state = *state;
             *state = VoiceState::ListeningForWakeWord;
-            info!("Voice state: {:?} -> ListeningForWakeWord (forced reset)", prev_state);
+            info!(
+                "Voice state: {:?} -> ListeningForWakeWord (forced reset)",
+                prev_state
+            );
         }
 
         info!("✓ Voice pipeline reset complete - ready for next operation");

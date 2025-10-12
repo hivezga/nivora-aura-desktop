@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration as StdDuration;
 
 use crate::secrets;
-use crate::spotify_auth::{SpotifyAuth, SpotifyAuthError, calculate_token_expiry};
+use crate::spotify_auth::{calculate_token_expiry, SpotifyAuth, SpotifyAuthError};
 
 /// Spotify API base URL
 const SPOTIFY_API_BASE: &str = "https://api.spotify.com/v1";
@@ -201,12 +201,12 @@ impl SpotifyClient {
     /// (within 5 minutes), and automatically refreshes it if needed.
     async fn get_valid_token(&self) -> Result<String, SpotifyError> {
         // Load current token
-        let access_token = secrets::load_spotify_access_token()
-            .map_err(|_| SpotifyError::NotAuthenticated)?;
+        let access_token =
+            secrets::load_spotify_access_token().map_err(|_| SpotifyError::NotAuthenticated)?;
 
         // Check expiry
-        let expiry = secrets::load_spotify_token_expiry()
-            .map_err(|_| SpotifyError::NotAuthenticated)?;
+        let expiry =
+            secrets::load_spotify_token_expiry().map_err(|_| SpotifyError::NotAuthenticated)?;
 
         let now = Utc::now();
 
@@ -216,8 +216,7 @@ impl SpotifyClient {
             self.refresh_token().await?;
 
             // Load the new token
-            secrets::load_spotify_access_token()
-                .map_err(|_| SpotifyError::NotAuthenticated)
+            secrets::load_spotify_access_token().map_err(|_| SpotifyError::NotAuthenticated)
         } else {
             log::debug!("Spotify token is still valid (expires at {})", expiry);
             Ok(access_token)
@@ -228,8 +227,8 @@ impl SpotifyClient {
     async fn refresh_token(&self) -> Result<(), SpotifyError> {
         log::info!("Refreshing Spotify access token");
 
-        let refresh_token = secrets::load_spotify_refresh_token()
-            .map_err(|_| SpotifyError::NotAuthenticated)?;
+        let refresh_token =
+            secrets::load_spotify_refresh_token().map_err(|_| SpotifyError::NotAuthenticated)?;
 
         let auth = SpotifyAuth::new(self.client_id.clone());
         let token_response = auth.refresh_access_token(&refresh_token).await?;
@@ -249,7 +248,10 @@ impl SpotifyClient {
                 .map_err(|e| SpotifyError::TokenRefreshFailed(e))?;
         }
 
-        log::info!("✓ Spotify token refreshed successfully (expires at {})", expiry);
+        log::info!(
+            "✓ Spotify token refreshed successfully (expires at {})",
+            expiry
+        );
 
         Ok(())
     }
@@ -376,10 +378,7 @@ impl SpotifyClient {
             .await
             .map_err(|e| SpotifyError::ParseError(e.to_string()))?;
 
-        let tracks = search_response
-            .tracks
-            .map(|t| t.items)
-            .unwrap_or_default();
+        let tracks = search_response.tracks.map(|t| t.items).unwrap_or_default();
 
         log::info!("Found {} tracks", tracks.len());
 

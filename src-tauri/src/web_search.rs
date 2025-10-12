@@ -66,7 +66,11 @@ pub async fn search_web(
     backend: SearchBackend,
     max_results: usize,
 ) -> Result<Vec<SearchResult>, SearchError> {
-    log::info!("Performing web search: \"{}\" (max: {})", query, max_results);
+    log::info!(
+        "Performing web search: \"{}\" (max: {})",
+        query,
+        max_results
+    );
 
     // Validate inputs
     if query.trim().is_empty() {
@@ -81,9 +85,7 @@ pub async fn search_web(
         SearchBackend::SearXNG { instance_url } => {
             search_searxng(query, &instance_url, clamped_max).await
         }
-        SearchBackend::BraveSearch { api_key } => {
-            search_brave(query, &api_key, clamped_max).await
-        }
+        SearchBackend::BraveSearch { api_key } => search_brave(query, &api_key, clamped_max).await,
     }
 }
 
@@ -173,7 +175,9 @@ async fn search_searxng(
         .map(|r| SearchResult {
             title: r.title,
             url: r.url,
-            snippet: r.content.unwrap_or_else(|| "No snippet available".to_string()),
+            snippet: r
+                .content
+                .unwrap_or_else(|| "No snippet available".to_string()),
             published_date: r.publishedDate.and_then(|d| {
                 DateTime::parse_from_rfc3339(&d)
                     .ok()
@@ -223,9 +227,7 @@ async fn search_brave(
             if e.is_timeout() {
                 SearchError::BackendUnavailable("Brave Search request timed out".to_string())
             } else if e.is_connect() {
-                SearchError::BackendUnavailable(
-                    "Could not connect to Brave Search API".to_string(),
-                )
+                SearchError::BackendUnavailable("Could not connect to Brave Search API".to_string())
             } else {
                 SearchError::Network(e)
             }
@@ -330,7 +332,9 @@ pub fn format_search_context(results: &[SearchResult]) -> String {
     }
 
     let mut context = String::from("=== Web Search Results ===\n\n");
-    context.push_str("The following information was retrieved from the web to help answer your question:\n\n");
+    context.push_str(
+        "The following information was retrieved from the web to help answer your question:\n\n",
+    );
 
     for (idx, result) in results.iter().enumerate() {
         // Format each result with source citation
@@ -350,7 +354,9 @@ pub fn format_search_context(results: &[SearchResult]) -> String {
 
     context.push_str("=== End of Search Results ===\n\n");
     context.push_str("Please use the above information to answer the user's question accurately. ");
-    context.push_str("Cite sources using [Source N] notation when referencing specific information.\n\n");
+    context.push_str(
+        "Cite sources using [Source N] notation when referencing specific information.\n\n",
+    );
 
     context
 }

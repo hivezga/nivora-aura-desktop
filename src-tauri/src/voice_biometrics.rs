@@ -1,14 +1,13 @@
+use crate::database::Database;
+use chrono::Utc;
+use rusqlite::params;
 /// Voice Biometrics Module - Speaker Recognition POC
 ///
 /// Provides speaker enrollment and identification using voice embeddings.
 /// This POC version uses simulated embeddings to validate the architecture.
 /// Full sherpa-rs integration will be added in the next phase.
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use chrono::Utc;
-use rusqlite::params;
-use crate::database::Database;
 
 /// Standard embedding dimension for speaker recognition models
 /// (WeSpeaker ECAPA-TDNN uses 192-dimensional embeddings)
@@ -27,7 +26,7 @@ const ENROLLMENT_VARIANCE_THRESHOLD: f32 = 0.15;
 pub struct UserProfile {
     pub id: i64,
     pub name: String,
-    #[serde(skip)]  // Don't serialize embedding in JSON responses
+    #[serde(skip)] // Don't serialize embedding in JSON responses
     pub voice_print_embedding: Vec<f32>,
     pub enrollment_date: String,
     pub last_recognized: Option<String>,
@@ -75,9 +74,7 @@ pub struct VoiceBiometrics {
 impl VoiceBiometrics {
     /// Create a new voice biometrics engine
     pub fn new(database: Arc<Mutex<Database>>) -> Self {
-        Self {
-            database,
-        }
+        Self { database }
     }
 
     /// Enroll a new user with voice samples
@@ -121,8 +118,12 @@ impl VoiceBiometrics {
         // Store in database
         let user_id = self.create_user_profile(&user_name, &voice_print).await?;
 
-        log::info!("✓ User '{}' enrolled successfully (ID: {}, variance: {:.3})",
-                   user_name, user_id, variance);
+        log::info!(
+            "✓ User '{}' enrolled successfully (ID: {}, variance: {:.3})",
+            user_name,
+            user_id,
+            variance
+        );
 
         Ok(user_id)
     }
@@ -146,7 +147,7 @@ impl VoiceBiometrics {
         let profiles = self.get_active_user_profiles().await?;
 
         if profiles.is_empty() {
-            return Ok(None);  // No enrolled users
+            return Ok(None); // No enrolled users
         }
 
         // Compare with stored voice prints using cosine similarity
@@ -154,7 +155,8 @@ impl VoiceBiometrics {
         let mut best_similarity = 0.0;
 
         for profile in profiles {
-            let similarity = Self::cosine_similarity(&query_embedding, &profile.voice_print_embedding);
+            let similarity =
+                Self::cosine_similarity(&query_embedding, &profile.voice_print_embedding);
 
             if similarity > best_similarity {
                 best_similarity = similarity;
@@ -170,16 +172,22 @@ impl VoiceBiometrics {
                 profile.recognition_count += 1;
                 profile.last_recognized = Some(Utc::now().to_rfc3339());
 
-                log::info!("✓ Speaker identified: {} (similarity: {:.3})",
-                           profile.name, best_similarity);
+                log::info!(
+                    "✓ Speaker identified: {} (similarity: {:.3})",
+                    profile.name,
+                    best_similarity
+                );
 
                 Ok(Some(profile))
             } else {
                 Ok(None)
             }
         } else {
-            log::debug!("No confident match (best similarity: {:.3} < threshold: {:.3})",
-                       best_similarity, RECOGNITION_THRESHOLD);
+            log::debug!(
+                "No confident match (best similarity: {:.3} < threshold: {:.3})",
+                best_similarity,
+                RECOGNITION_THRESHOLD
+            );
             Ok(None)
         }
     }
@@ -276,10 +284,7 @@ impl VoiceBiometrics {
 
     /// Serialize embedding to BLOB for database storage
     pub fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
-        embedding
-            .iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect()
+        embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
     }
 
     /// Deserialize embedding from database BLOB
@@ -318,14 +323,7 @@ impl VoiceBiometrics {
                 "INSERT INTO user_profiles
                  (name, voice_print_embedding, enrollment_date, is_active, created_at, updated_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
-                    user_name,
-                    embedding_blob,
-                    &now,
-                    true,
-                    &now,
-                    &now,
-                ],
+                params![user_name, embedding_blob, &now, true, &now, &now,],
             )
             .map_err(|e| BiometricsError::Database(e.to_string()))?;
 
@@ -339,10 +337,12 @@ impl VoiceBiometrics {
 
         let mut stmt = db
             .conn
-            .prepare("SELECT id, name, voice_print_embedding, enrollment_date, last_recognized,
+            .prepare(
+                "SELECT id, name, voice_print_embedding, enrollment_date, last_recognized,
                              recognition_count, is_active, created_at, updated_at
                       FROM user_profiles
-                      WHERE is_active = 1")
+                      WHERE is_active = 1",
+            )
             .map_err(|e| BiometricsError::Database(e.to_string()))?;
 
         let profiles = stmt
@@ -402,7 +402,10 @@ impl VoiceBiometrics {
     }
 
     /// Get user profile by ID
-    pub async fn get_user_profile(&self, user_id: i64) -> Result<Option<UserProfile>, BiometricsError> {
+    pub async fn get_user_profile(
+        &self,
+        user_id: i64,
+    ) -> Result<Option<UserProfile>, BiometricsError> {
         let profiles = self.get_active_user_profiles().await?;
         Ok(profiles.into_iter().find(|p| p.id == user_id))
     }

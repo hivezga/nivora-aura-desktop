@@ -3,7 +3,6 @@
 /// This module provides a centralized error type that encompasses all possible
 /// errors that can occur in the application. Using `thiserror`, we derive the
 /// Error trait and provide clean, descriptive error messages.
-
 use thiserror::Error;
 
 /// Main error type for all Aura operations
