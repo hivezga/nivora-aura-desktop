@@ -952,6 +952,50 @@ impl Database {
 
         Ok(())
     }
+
+    /// Execute a raw SQL query and return the number of affected rows
+    /// This is a helper method for modules that need direct database access
+    pub fn execute_sql(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<usize, String> {
+        self.conn
+            .execute(sql, params)
+            .map_err(|e| format!("SQL execution failed: {}", e))
+    }
+
+    /// Execute a query that returns a single row
+    pub fn query_row_sql<T, F>(&self, sql: &str, params: &[&dyn rusqlite::ToSql], f: F) -> Result<T, String>
+    where
+        F: FnOnce(&rusqlite::Row) -> rusqlite::Result<T>,
+    {
+        self.conn
+            .query_row(sql, params, f)
+            .map_err(|e| format!("SQL query failed: {}", e))
+    }
+
+    /// Prepare and execute a query that returns multiple rows
+    pub fn query_map_sql<T, F>(&self, sql: &str, params: &[&dyn rusqlite::ToSql], f: F) -> Result<Vec<T>, String>
+    where
+        F: Fn(&rusqlite::Row) -> rusqlite::Result<T>,
+    {
+        let mut stmt = self.conn
+            .prepare(sql)
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+        
+        let rows = stmt
+            .query_map(params, f)
+            .map_err(|e| format!("Query execution failed: {}", e))?;
+        
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| format!("Row processing failed: {}", e))?);
+        }
+        
+        Ok(results)
+    }
+
+    /// Get the last inserted row ID
+    pub fn last_insert_rowid(&self) -> i64 {
+        self.conn.last_insert_rowid()
+    }
 }
 
 /// Get the path to the database file

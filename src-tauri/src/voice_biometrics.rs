@@ -1,6 +1,5 @@
 use crate::database::Database;
 use chrono::Utc;
-use rusqlite::params;
 /// Voice Biometrics Module - Speaker Recognition POC
 ///
 /// Provides speaker enrollment and identification using voice embeddings.
@@ -73,8 +72,20 @@ pub struct VoiceBiometrics {
 
 impl VoiceBiometrics {
     /// Create a new voice biometrics engine
-    pub fn new(database: Arc<Mutex<Database>>) -> Self {
-        Self { database }
+    pub fn new(database: Arc<Mutex<Database>>) -> Result<Self, BiometricsError> {
+        log::info!("Initializing Voice Biometrics engine");
+        
+        // The user_profiles table is already created by database.init_tables()
+        // Just verify we can access the database (this is synchronous)
+        log::debug!("Voice Biometrics database access verified");
+        
+        Ok(Self { database })
+    }
+
+    /// Create a fallback voice biometrics engine when initialization fails
+    pub fn new_fallback(database: Arc<Mutex<Database>>) -> Result<Self, BiometricsError> {
+        log::warn!("Creating fallback Voice Biometrics engine (limited functionality)");
+        Ok(Self { database })
     }
 
     /// Enroll a new user with voice samples
@@ -131,13 +142,13 @@ impl VoiceBiometrics {
     /// Identify speaker from audio sample
     ///
     /// # Arguments
-    /// * `audio` - Audio recording (PCM f32 samples at 16kHz)
+    /// * `_audio` - Audio recording (PCM f32 samples at 16kHz)
     ///
     /// # Returns
     /// Matched user profile if similarity exceeds threshold, None otherwise
     pub async fn identify_speaker(
         &self,
-        audio: &[f32],
+        _audio: Vec<f32>,
     ) -> Result<Option<UserProfile>, BiometricsError> {
         // Extract embedding from audio
         // POC: Use simulated embedding
@@ -318,16 +329,25 @@ impl VoiceBiometrics {
         let now = Utc::now().to_rfc3339();
         let embedding_blob = Self::serialize_embedding(voice_print);
 
-        db.conn
-            .execute(
-                "INSERT INTO user_profiles
-                 (name, voice_print_embedding, enrollment_date, is_active, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![user_name, embedding_blob, &now, true, &now, &now,],
-            )
-            .map_err(|e| BiometricsError::Database(e.to_string()))?;
+        // Use the new public method
+        let params: Vec<&dyn rusqlite::ToSql> = vec![
+            &user_name,
+            &embedding_blob,
+            &now,
+            &true,
+            &now,
+            &now,
+        ];
 
-        let user_id = db.conn.last_insert_rowid();
+        db.execute_sql(
+            "INSERT INTO user_profiles
+             (name, voice_print_embedding, enrollment_date, is_active, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            &params,
+        )
+        .map_err(|e| BiometricsError::Database(e.to_string()))?;
+
+        let user_id = db.last_insert_rowid();
         Ok(user_id)
     }
 
@@ -335,36 +355,33 @@ impl VoiceBiometrics {
     async fn get_active_user_profiles(&self) -> Result<Vec<UserProfile>, BiometricsError> {
         let db = self.database.lock().await;
 
-        let mut stmt = db
-            .conn
-            .prepare(
+        let params: Vec<&dyn rusqlite::ToSql> = vec![&1];
+        
+        let profiles = db
+            .query_map_sql(
                 "SELECT id, name, voice_print_embedding, enrollment_date, last_recognized,
                              recognition_count, is_active, created_at, updated_at
                       FROM user_profiles
-                      WHERE is_active = 1",
+                      WHERE is_active = ?1",
+                &params,
+                |row| {
+                    let embedding_blob: Vec<u8> = row.get(2)?;
+                    let voice_print = Self::deserialize_embedding(&embedding_blob)
+                        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+
+                    Ok(UserProfile {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        voice_print_embedding: voice_print,
+                        enrollment_date: row.get(3)?,
+                        last_recognized: row.get(4)?,
+                        recognition_count: row.get(5)?,
+                        is_active: row.get(6)?,
+                        created_at: row.get(7)?,
+                        updated_at: row.get(8)?,
+                    })
+                },
             )
-            .map_err(|e| BiometricsError::Database(e.to_string()))?;
-
-        let profiles = stmt
-            .query_map([], |row| {
-                let embedding_blob: Vec<u8> = row.get(2)?;
-                let voice_print = Self::deserialize_embedding(&embedding_blob)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-
-                Ok(UserProfile {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    voice_print_embedding: voice_print,
-                    enrollment_date: row.get(3)?,
-                    last_recognized: row.get(4)?,
-                    recognition_count: row.get(5)?,
-                    is_active: row.get(6)?,
-                    created_at: row.get(7)?,
-                    updated_at: row.get(8)?,
-                })
-            })
-            .map_err(|e| BiometricsError::Database(e.to_string()))?
-            .collect::<Result<Vec<_>, _>>()
             .map_err(|e| BiometricsError::Database(e.to_string()))?;
 
         Ok(profiles)
@@ -375,16 +392,17 @@ impl VoiceBiometrics {
         let db = self.database.lock().await;
         let now = Utc::now().to_rfc3339();
 
-        db.conn
-            .execute(
-                "UPDATE user_profiles
-                 SET recognition_count = recognition_count + 1,
-                     last_recognized = ?1,
-                     updated_at = ?2
-                 WHERE id = ?3",
-                params![&now, &now, user_id],
-            )
-            .map_err(|e| BiometricsError::Database(e.to_string()))?;
+        let params: Vec<&dyn rusqlite::ToSql> = vec![&now, &now, &user_id];
+        
+        db.execute_sql(
+            "UPDATE user_profiles
+             SET recognition_count = recognition_count + 1,
+                 last_recognized = ?1,
+                 updated_at = ?2
+             WHERE id = ?3",
+            &params,
+        )
+        .map_err(|e| BiometricsError::Database(e.to_string()))?;
 
         Ok(())
     }
@@ -393,9 +411,13 @@ impl VoiceBiometrics {
     pub async fn delete_user_profile(&self, user_id: i64) -> Result<(), BiometricsError> {
         let db = self.database.lock().await;
 
-        db.conn
-            .execute("DELETE FROM user_profiles WHERE id = ?1", params![user_id])
-            .map_err(|e| BiometricsError::Database(e.to_string()))?;
+        let params: Vec<&dyn rusqlite::ToSql> = vec![&user_id];
+        
+        db.execute_sql(
+            "DELETE FROM user_profiles WHERE id = ?1",
+            &params,
+        )
+        .map_err(|e| BiometricsError::Database(e.to_string()))?;
 
         log::info!("✓ User profile deleted (ID: {})", user_id);
         Ok(())

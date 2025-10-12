@@ -10,6 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { showErrorToast } from "../utils/errorHandler";
 import EnrollmentModal from "./EnrollmentModal";
+import { formatDistanceToNow } from "date-fns";
 
 export interface UserProfile {
   id: number;
@@ -27,200 +28,276 @@ interface BiometricsStatus {
   is_enabled: boolean;
 }
 
+interface ProfileCardProps {
+  profile: UserProfile;
+  onDelete: (id: number) => void;
+}
+
+const ProfileCard: React.FC<ProfileCardProps> = ({ profile, onDelete }) => {
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const handleDelete = async () => {
+    if (!showDeleteConfirm) {
+      setShowDeleteConfirm(true);
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      await invoke("biometrics_delete_user", { userId: profile.id });
+      onDelete(profile.id);
+    } catch (error) {
+      showErrorToast(`Failed to delete profile: ${error}`);
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
+
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return "Never";
+    try {
+      return formatDistanceToNow(new Date(dateString), { addSuffix: true });
+    } catch {
+      return "Unknown";
+    }
+  };
+
+  return (
+    <div className="border rounded-lg p-4 space-y-3 bg-white dark:bg-gray-800">
+      <div className="flex items-start justify-between">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+            <span className="text-lg font-semibold text-blue-600 dark:text-blue-300">
+              {profile.name.charAt(0).toUpperCase()}
+            </span>
+          </div>
+          <div>
+            <h3 className="font-semibold text-lg">{profile.name}</h3>
+            <div className="flex items-center space-x-2 text-sm text-gray-600 dark:text-gray-300">
+              <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
+                profile.is_active 
+                  ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200" 
+                  : "bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200"
+              }`}>
+                {profile.is_active ? "✅ Active" : "⏸️ Inactive"}
+              </span>
+              <span>•</span>
+              <span>Enrolled {formatDate(profile.enrollment_date)}</span>
+            </div>
+          </div>
+        </div>
+        <div className="text-right">
+          {showDeleteConfirm ? (
+            <div className="space-x-2">
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => setShowDeleteConfirm(false)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                variant="destructive" 
+                size="sm"
+                onClick={handleDelete}
+                disabled={isDeleting}
+              >
+                {isDeleting ? "Deleting..." : "Confirm"}
+              </Button>
+            </div>
+          ) : (
+            <Button 
+              variant="outline" 
+              size="sm"
+              onClick={handleDelete}
+              className="text-red-600 hover:text-red-700"
+            >
+              Delete Profile
+            </Button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between text-sm text-gray-600 dark:text-gray-300">
+        <div className="flex items-center space-x-4">
+          <span>📈 Recognized {profile.recognition_count} times</span>
+          {profile.last_recognized && (
+            <span>🕐 Last seen {formatDate(profile.last_recognized)}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const UserProfilesSettings: React.FC = () => {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
+  const [status, setStatus] = useState<BiometricsStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showEnrollmentModal, setShowEnrollmentModal] = useState(false);
-  const [status, setStatus] = useState<BiometricsStatus>({
-    enrolled_user_count: 0,
-    is_enabled: true,
-  });
-
-  // Load profiles on mount
-  useEffect(() => {
-    loadProfiles();
-    loadStatus();
-  }, []);
 
   const loadProfiles = async () => {
-    setIsLoading(true);
     try {
-      const userProfiles = await invoke<UserProfile[]>("biometrics_list_users");
-      setProfiles(userProfiles);
-      console.log("✓ Loaded voice profiles:", userProfiles);
+      setIsLoading(true);
+      const [profilesData, statusData] = await Promise.all([
+        invoke<UserProfile[]>("biometrics_list_users"),
+        invoke<BiometricsStatus>("biometrics_get_status"),
+      ]);
+      
+      setProfiles(profilesData);
+      setStatus(statusData);
     } catch (error) {
-      console.error("Failed to load voice profiles:", error);
-      showErrorToast(error, "Failed to load voice profiles");
+      showErrorToast(`Failed to load user profiles: ${error}`);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const loadStatus = async () => {
-    try {
-      const bioStatus = await invoke<BiometricsStatus>("biometrics_get_status");
-      setStatus(bioStatus);
-    } catch (error) {
-      console.error("Failed to load biometrics status:", error);
+  useEffect(() => {
+    loadProfiles();
+  }, []);
+
+  const handleProfileDelete = (deletedId: number) => {
+    setProfiles(profiles.filter(p => p.id !== deletedId));
+    if (status) {
+      setStatus({
+        ...status,
+        enrolled_user_count: status.enrolled_user_count - 1,
+      });
     }
   };
 
-  const handleDeleteProfile = async (profileId: number, profileName: string) => {
-    if (!confirm(`Are you sure you want to delete the voice profile for "${profileName}"? This action cannot be undone.`)) {
-      return;
-    }
-
-    try {
-      await invoke("biometrics_delete_user", { userId: profileId });
-      console.log(`✓ Deleted voice profile: ${profileName}`);
-      alert(`Voice profile for "${profileName}" has been deleted.`);
-      await loadProfiles();
-      await loadStatus();
-    } catch (error) {
-      showErrorToast(error, `Failed to delete profile for ${profileName}`);
-    }
-  };
-
-  const handleEnrollmentComplete = async () => {
+  const handleEnrollmentComplete = () => {
     setShowEnrollmentModal(false);
-    await loadProfiles();
-    await loadStatus();
+    loadProfiles(); // Reload to show new profile
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 0) return "Today";
-    if (diffDays === 1) return "Yesterday";
-    if (diffDays < 7) return `${diffDays} days ago`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`;
-    if (diffDays < 365) return `${Math.floor(diffDays / 30)} months ago`;
-    return `${Math.floor(diffDays / 365)} years ago`;
-  };
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="text-center py-8">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-2 text-sm text-gray-600 dark:text-gray-300">Loading user profiles...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
-      <div className="space-y-4">
-        {/* Header with stats */}
-        <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
-          <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-medium text-gray-300">Voice Biometrics</h4>
-            <span className="text-xs bg-purple-900 text-purple-200 px-2 py-1 rounded">
-              {status.enrolled_user_count} {status.enrolled_user_count === 1 ? "user" : "users"} enrolled
-            </span>
-          </div>
-          <p className="text-xs text-gray-500">
-            🔒 All voice data stored locally and securely • Privacy-first design
+      <div className="space-y-6">
+        {/* Header */}
+        <div>
+          <h2 className="text-2xl font-bold mb-2">User Profiles</h2>
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            Manage voice biometric profiles for personalized Aura experience
           </p>
         </div>
 
-        {/* Loading state */}
-        {isLoading && (
-          <div className="text-center py-6 text-gray-400">
-            <div className="animate-pulse">Loading profiles...</div>
-          </div>
-        )}
-
-        {/* Empty state */}
-        {!isLoading && profiles.length === 0 && (
-          <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 text-center">
-            <div className="text-4xl mb-3">🎤</div>
-            <h4 className="text-lg font-medium text-gray-200 mb-2">No Users Enrolled</h4>
-            <p className="text-sm text-gray-400 mb-4">
-              Enroll your voice to enable personalized responses and automatic user recognition.
-            </p>
-            <Button
-              onClick={() => setShowEnrollmentModal(true)}
-              className="bg-purple-700 hover:bg-purple-600 text-white"
-            >
-              + Enroll Your Voice
-            </Button>
-          </div>
-        )}
-
-        {/* Profile list */}
-        {!isLoading && profiles.length > 0 && (
-          <div className="space-y-3">
-            {profiles.map((profile) => (
-              <div
-                key={profile.id}
-                className="bg-gray-800 p-4 rounded-lg border border-gray-700 hover:border-gray-600 transition-colors"
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-2xl">👤</span>
-                      <h5 className="text-base font-medium text-gray-100">{profile.name}</h5>
-                      {profile.is_active && (
-                        <span className="text-xs bg-green-900 text-green-200 px-2 py-0.5 rounded">
-                          Active
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="ml-9 space-y-1">
-                      <p className="text-xs text-gray-400">
-                        Enrolled {formatDate(profile.enrollment_date)}
-                      </p>
-
-                      {profile.last_recognized && (
-                        <p className="text-xs text-gray-400">
-                          Last recognized: {formatDate(profile.last_recognized)}
-                        </p>
-                      )}
-
-                      <p className="text-xs text-gray-500">
-                        📈 Recognized {profile.recognition_count} times
-                      </p>
-                    </div>
-                  </div>
-
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleDeleteProfile(profile.id, profile.name)}
-                    className="ml-4 bg-gray-700 hover:bg-red-900 text-gray-300 hover:text-red-200 border-gray-600"
-                  >
-                    Delete
-                  </Button>
-                </div>
+        {/* Status Overview */}
+        <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <span className="text-2xl">👥</span>
+              <span className="font-medium">
+                {status?.enrolled_user_count || 0} user{status?.enrolled_user_count !== 1 ? 's' : ''} enrolled
+              </span>
+            </div>
+            {status?.is_enabled && (
+              <div className="flex items-center space-x-1 text-sm text-green-600 dark:text-green-400">
+                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                <span>Voice recognition active</span>
               </div>
-            ))}
-
-            {/* Add new user button */}
-            <Button
-              onClick={() => setShowEnrollmentModal(true)}
-              variant="outline"
-              className="w-full bg-gray-800 hover:bg-gray-700 text-gray-300 border-gray-700"
-            >
-              + Add Another User
-            </Button>
+            )}
           </div>
-        )}
+          <div className="flex items-center space-x-1 text-sm text-gray-600 dark:text-gray-300">
+            <span>🔒</span>
+            <span>All voice data stored locally and securely</span>
+          </div>
+        </div>
 
-        {/* Info box */}
-        <div className="bg-purple-900/20 border border-purple-800/30 p-4 rounded-lg">
-          <h4 className="text-sm font-medium text-purple-200 mb-2">💡 How it works</h4>
-          <ul className="text-xs text-purple-300/80 space-y-1">
-            <li>• Aura uses your voice to identify who's speaking</li>
-            <li>• Personalized responses based on your preferences</li>
-            <li>• Access to your Spotify playlists and smart home devices</li>
-            <li>• 100% offline processing - no cloud uploads</li>
-          </ul>
+        {/* User Profiles List */}
+        <div className="space-y-4">
+          {profiles.length === 0 ? (
+            <div className="text-center py-12 space-y-4">
+              <div className="text-6xl">🎤</div>
+              <div>
+                <h3 className="text-lg font-semibold mb-2">No voice profiles yet</h3>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                  Create your first voice profile to enable personalized responses
+                </p>
+                <Button onClick={() => setShowEnrollmentModal(true)}>
+                  ➕ Create Voice Profile
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {profiles.map((profile) => (
+                <ProfileCard
+                  key={profile.id}
+                  profile={profile}
+                  onDelete={handleProfileDelete}
+                />
+              ))}
+
+              {/* Add New User Button */}
+              <div className="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center">
+                <Button
+                  onClick={() => setShowEnrollmentModal(true)}
+                  variant="outline"
+                  className="space-x-2"
+                >
+                  <span>➕</span>
+                  <span>Add New User</span>
+                </Button>
+                <p className="text-sm text-gray-600 dark:text-gray-300 mt-2">
+                  Enroll additional family members or users
+                </p>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Privacy Information */}
+        <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+          <div className="flex items-start space-x-3">
+            <span className="text-xl">🔒</span>
+            <div className="space-y-2">
+              <h4 className="font-medium text-blue-900 dark:text-blue-100">Your Privacy</h4>
+              <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
+                <li>• All voice data is stored locally on this device</li>
+                <li>• Voice prints never leave your computer</li>
+                <li>• You can delete your profile at any time</li>
+                <li>• No cloud uploads or external processing</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        {/* Help Tip */}
+        <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+          <div className="flex items-start space-x-3">
+            <span className="text-xl">💡</span>
+            <div>
+              <h4 className="font-medium text-yellow-900 dark:text-yellow-100 mb-1">Tip</h4>
+              <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                Aura uses your voice to provide personalized responses and access your specific data 
+                (like your Spotify playlists or calendar). The more you use it, the better it gets at recognizing you!
+              </p>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Enrollment Modal */}
-      {showEnrollmentModal && (
-        <EnrollmentModal
-          isOpen={showEnrollmentModal}
-          onClose={() => setShowEnrollmentModal(false)}
-          onComplete={handleEnrollmentComplete}
-        />
-      )}
+      <EnrollmentModal
+        isOpen={showEnrollmentModal}
+        onClose={() => setShowEnrollmentModal(false)}
+        onComplete={handleEnrollmentComplete}
+      />
     </>
   );
 };

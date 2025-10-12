@@ -40,6 +40,10 @@ pub enum AuraError {
     #[error("Home Assistant error: {0}")]
     HomeAssistant(String),
 
+    /// Voice biometrics errors (enrollment, identification, model operations)
+    #[error("Voice biometrics error: {0}")]
+    VoiceBiometrics(String),
+
     /// File I/O errors (model loading, directory access)
     #[error("File I/O error: {0}")]
     Io(#[from] std::io::Error),

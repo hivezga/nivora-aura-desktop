@@ -19,6 +19,7 @@ use error::AuraError;
 use llm::LLMEngine;
 use native_voice::NativeVoicePipeline;
 use ollama_sidecar::OllamaSidecar;
+use voice_biometrics::{VoiceBiometrics, UserProfile};
 use serde::Serialize;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -31,6 +32,16 @@ use tts::TextToSpeech;
 struct SystemStatus {
     stt_connected: bool,
     llm_connected: bool,
+}
+
+/// Voice biometrics state type for Tauri state management
+pub type VoiceBiometricsState = Arc<TokioMutex<VoiceBiometrics>>;
+
+/// Biometrics status payload for frontend
+#[derive(Serialize, Clone, Debug)]
+struct BiometricsStatus {
+    enrolled_user_count: usize,
+    is_enabled: bool,
 }
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -980,7 +991,7 @@ use ha_client::HomeAssistantClient;
 use music_intent::{MusicIntent, MusicIntentParser};
 use smarthome_intent::{SmartHomeIntent, SmartHomeIntentParser, TemperatureUnit};
 use spotify_auth::{calculate_token_expiry, SpotifyAuth};
-use spotify_client::{format_currently_playing, format_track_info, SpotifyClient, SpotifyError};
+use spotify_client::{format_currently_playing, format_track_info, SpotifyClient};
 
 /// Start Spotify OAuth2 authorization flow
 ///
@@ -1599,7 +1610,7 @@ async fn ha_handle_smart_home_command(
 
     // Execute based on intent
     match intent {
-        SmartHomeIntent::TurnOn { room, device_type, device_name } => {
+        SmartHomeIntent::TurnOn { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),
@@ -1627,7 +1638,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::TurnOff { room, device_type, device_name } => {
+        SmartHomeIntent::TurnOff { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),
@@ -1655,7 +1666,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::SetBrightness { room, device_name, brightness } => {
+        SmartHomeIntent::SetBrightness { room, device_name: _, brightness } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("light".to_string()),
                 area: room.clone(),
@@ -1714,7 +1725,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::GetState { room, device_type, device_name } => {
+        SmartHomeIntent::GetState { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),
@@ -1734,7 +1745,7 @@ async fn ha_handle_smart_home_command(
             ))
         }
 
-        SmartHomeIntent::OpenCover { room, device_name } => {
+        SmartHomeIntent::OpenCover { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("cover".to_string()),
                 area: room.clone(),
@@ -1753,7 +1764,7 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Opening cover{}", if entities.len() == 1 { "" } else { "s" }))
         }
 
-        SmartHomeIntent::CloseCover { room, device_name } => {
+        SmartHomeIntent::CloseCover { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("cover".to_string()),
                 area: room.clone(),
@@ -1772,7 +1783,7 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Closing cover{}", if entities.len() == 1 { "" } else { "s" }))
         }
 
-        SmartHomeIntent::Lock { room, device_name } => {
+        SmartHomeIntent::Lock { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("lock".to_string()),
                 area: room.clone(),
@@ -1791,7 +1802,7 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Locked {} lock{}", entities.len(), if entities.len() == 1 { "" } else { "s" }))
         }
 
-        SmartHomeIntent::Unlock { room, device_name } => {
+        SmartHomeIntent::Unlock { room, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("lock".to_string()),
                 area: room.clone(),
@@ -1827,7 +1838,7 @@ async fn ha_handle_smart_home_command(
             }
         }
 
-        SmartHomeIntent::Toggle { room, device_type, device_name } => {
+        SmartHomeIntent::Toggle { room, device_type, device_name: _ } => {
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
                 area: room.clone(),
@@ -1875,6 +1886,125 @@ async fn ha_dismiss_onboarding(db: State<'_, DatabaseState>) -> Result<(), AuraE
     log::info!("✓ Home Assistant onboarding dismissed");
 
     Ok(())
+}
+
+// ===== VOICE BIOMETRICS COMMANDS =====
+
+/// Enroll a new user with voice samples for biometric identification
+#[tauri::command]
+async fn biometrics_enroll_user(
+    user_name: String,
+    audio_samples: Vec<Vec<f32>>,
+    biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<i64, AuraError> {
+    log::info!("Starting voice biometrics enrollment for user: {}", user_name);
+    
+    let biometrics_engine = biometrics.lock().await;
+    
+    match biometrics_engine.enroll_user(user_name.clone(), audio_samples).await {
+        Ok(user_id) => {
+            log::info!("✓ Voice biometrics enrollment successful for user '{}' (ID: {})", user_name, user_id);
+            Ok(user_id)
+        }
+        Err(e) => {
+            log::error!("✗ Voice biometrics enrollment failed for user '{}': {}", user_name, e);
+            Err(AuraError::VoiceBiometrics(e.to_string()))
+        }
+    }
+}
+
+/// List all enrolled user profiles
+#[tauri::command]
+async fn biometrics_list_users(
+    biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<Vec<UserProfile>, AuraError> {
+    log::debug!("Listing all voice biometrics user profiles");
+    
+    let biometrics_engine = biometrics.lock().await;
+    
+    match biometrics_engine.list_all_users().await {
+        Ok(users) => {
+            log::debug!("✓ Retrieved {} user profiles", users.len());
+            Ok(users)
+        }
+        Err(e) => {
+            log::error!("✗ Failed to list user profiles: {}", e);
+            Err(AuraError::VoiceBiometrics(e.to_string()))
+        }
+    }
+}
+
+/// Delete a user profile by ID
+#[tauri::command]
+async fn biometrics_delete_user(
+    user_id: i64,
+    biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<(), AuraError> {
+    log::info!("Deleting voice biometrics profile for user ID: {}", user_id);
+    
+    let biometrics_engine = biometrics.lock().await;
+    
+    match biometrics_engine.delete_user_profile(user_id).await {
+        Ok(_) => {
+            log::info!("✓ Voice biometrics profile deleted (ID: {})", user_id);
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("✗ Failed to delete voice biometrics profile (ID: {}): {}", user_id, e);
+            Err(AuraError::VoiceBiometrics(e.to_string()))
+        }
+    }
+}
+
+/// Get biometrics system status (number of users, enabled state)
+#[tauri::command]
+async fn biometrics_get_status(
+    biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<BiometricsStatus, AuraError> {
+    log::debug!("Getting voice biometrics system status");
+    
+    let biometrics_engine = biometrics.lock().await;
+    
+    match biometrics_engine.list_all_users().await {
+        Ok(users) => {
+            let status = BiometricsStatus {
+                enrolled_user_count: users.len(),
+                is_enabled: true,
+            };
+            log::debug!("✓ Biometrics status: {} users enrolled", users.len());
+            Ok(status)
+        }
+        Err(e) => {
+            log::error!("✗ Failed to get biometrics status: {}", e);
+            Err(AuraError::VoiceBiometrics(e.to_string()))
+        }
+    }
+}
+
+/// Identify speaker from audio sample (for real-time recognition)
+#[tauri::command]
+async fn biometrics_identify_speaker(
+    audio_sample: Vec<f32>,
+    biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<Option<UserProfile>, AuraError> {
+    log::debug!("Identifying speaker from audio sample");
+    
+    let biometrics_engine = biometrics.lock().await;
+    
+    match biometrics_engine.identify_speaker(audio_sample).await {
+        Ok(Some(user)) => {
+            log::info!("✓ Speaker identified: {} (ID: {})", user.name, user.id);
+            Ok(Some(user))
+        }
+        Ok(None) => {
+            log::debug!("No speaker match found");
+            Ok(None)
+        }
+        Err(e) => {
+            log::error!("✗ Speaker identification failed: {}", e);
+            Err(AuraError::VoiceBiometrics(e.to_string()))
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1988,12 +2118,30 @@ pub fn run() {
     let entity_manager: EntityManagerState = Arc::new(EntityManager::new());
     let ha_client_state: HAClientState = Arc::new(TokioMutex::new(None));
 
+    // Initialize Voice Biometrics engine
+    log::info!("Initializing Voice Biometrics engine...");
+    let biometrics_engine = match VoiceBiometrics::new(database.clone()) {
+        Ok(engine) => {
+            log::info!("✓ Voice Biometrics engine initialized successfully");
+            Arc::new(TokioMutex::new(engine))
+        }
+        Err(e) => {
+            log::error!("✗ Failed to initialize Voice Biometrics engine: {}", e);
+            log::warn!("  Voice biometrics features will be unavailable");
+            // Don't panic - biometrics is optional functionality
+            let fallback_engine = VoiceBiometrics::new_fallback(database.clone())
+                .expect("Failed to create fallback biometrics engine");
+            Arc::new(TokioMutex::new(fallback_engine))
+        }
+    };
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(database.clone())
         .manage(llm_engine)
         .manage(entity_manager)
         .manage(ha_client_state)
+        .manage(biometrics_engine)
         .invoke_handler(tauri::generate_handler![
             greet,
             handle_user_prompt,
@@ -2037,7 +2185,13 @@ pub fn run() {
             ha_get_entity,
             ha_call_service,
             ha_handle_smart_home_command,
-            ha_dismiss_onboarding
+            ha_dismiss_onboarding,
+            // Voice Biometrics commands
+            biometrics_enroll_user,
+            biometrics_list_users,
+            biometrics_delete_user,
+            biometrics_get_status,
+            biometrics_identify_speaker
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();

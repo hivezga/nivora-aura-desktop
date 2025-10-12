@@ -70,8 +70,7 @@ tungstenite = "0.21"  # WebSocket protocol implementation
 futures-util = "0.3"  # Stream utilities for WebSocket handling
 async-trait = "0.1"  # Async trait definitions
 
-# Voice Biometrics (Speaker Recognition)
-sherpa-rs = { version = "0.6", features = ["download-binaries"] }  # Speaker embedding extraction via sherpa-onnx
+# Voice Biometrics (Speaker Recognition) - POC with simulated embeddings
 ndarray = "0.16"  # Numerical arrays for embedding operations
 
 # Ollama sidecar process management
