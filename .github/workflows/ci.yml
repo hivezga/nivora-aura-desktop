@@ -69,7 +69,7 @@ jobs:
       # TypeScript type checking (NEW)
       - name: TypeScript type check
         run: pnpm exec tsc --noEmit --skipLibCheck
-        continue-on-error: true  # Don't block on TS errors initially
+
 
       # Frontend linting (NEW - if ESLint configured)
       - name: Lint frontend code
@@ -79,7 +79,6 @@ jobs:
           else
             echo "ℹ️  ESLint not configured, skipping frontend linting"
           fi
-        continue-on-error: true
 
   # Security audits (3 minutes)
   security:
@@ -97,7 +96,7 @@ jobs:
       - name: Audit Rust dependencies
         working-directory: src-tauri
         run: cargo audit
-        continue-on-error: true  # Don't fail on advisory warnings
+
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -115,7 +114,7 @@ jobs:
 
       - name: Audit frontend dependencies
         run: pnpm audit --audit-level=high
-        continue-on-error: true  # Don't fail on moderate vulnerabilities
+
 
   # Rust tests (5-7 minutes)
   test-rust:
@@ -161,12 +160,12 @@ jobs:
       - name: Run Rust integration tests
         working-directory: src-tauri
         run: cargo test --verbose --test '*'
-        continue-on-error: true  # Integration tests may fail without full setup
+
 
       - name: Run Rust doc tests
         working-directory: src-tauri
         run: cargo test --doc
-        continue-on-error: true
+
 
   # Build check across platforms (5 minutes per platform)
   build-check:
