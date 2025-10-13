@@ -58,15 +58,15 @@ url = "2.5"  # URL parsing and manipulation
 tiny_http = "0.12"  # Lightweight HTTP server for OAuth2 callback
 regex = "1.10"  # Regular expressions for music intent parsing
 sha2 = "0.10"  # SHA-256 hashing for PKCE code challenge
-base64 = "0.21"  # Base64 encoding for PKCE
-rand = "0.8"  # Random number generation for PKCE verifier
+base64 = "0.22"  # Base64 encoding for PKCE
+rand = "0.9"  # Random number generation for PKCE verifier
 urlencoding = "2.1"  # URL encoding for OAuth parameters
 open = "5.0"  # Open URLs in system browser
 once_cell = "1.20"  # Lazy static initialization for compiled regexes
 
 # Home Assistant Integration
-tokio-tungstenite = "0.21"  # WebSocket client with Tokio runtime support
-tungstenite = "0.21"  # WebSocket protocol implementation
+tokio-tungstenite = "0.28"  # WebSocket client with Tokio runtime support
+tungstenite = "0.28"  # WebSocket protocol implementation
 futures-util = "0.3"  # Stream utilities for WebSocket handling
 async-trait = "0.1"  # Async trait definitions
 
