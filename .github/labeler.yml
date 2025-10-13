@@ -2,50 +2,36 @@
 
 "area: backend":
   - changed-files:
-      - any-glob-to-any-file: "src-tauri/**/*"
+      - any-glob-to-any-file: ["src-tauri/**/*"]
 
 "area: frontend":
   - changed-files:
-      - any-glob-to-any-file: "src/**/*"
-      - any-glob-to-any-file: "*.tsx"
-      - any-glob-to-any-file: "*.ts"
+      - any-glob-to-any-file: ["src/**/*", "*.tsx", "*.ts"]
 
 "area: documentation":
   - changed-files:
-      - any-glob-to-any-file: "Documentation/**/*"
-      - any-glob-to-any-file: "**.md"
-      - any-glob-to-any-file: "README.md"
+      - any-glob-to-any-file: ["Documentation/**/*", "**.md", "README.md"]
 
 "area: ci/cd":
   - changed-files:
-      - any-glob-to-any-file: ".github/workflows/**/*"
-      - any-glob-to-any-file: ".github/dependabot.yml"
+      - any-glob-to-any-file: [".github/workflows/**/*", ".github/dependabot.yml"]
 
 "area: dependencies":
   - changed-files:
-      - any-glob-to-any-file: "package.json"
-      - any-glob-to-any-file: "pnpm-lock.yaml"
-      - any-glob-to-any-file: "src-tauri/Cargo.toml"
-      - any-glob-to-any-file: "src-tauri/Cargo.lock"
+      - any-glob-to-any-file: ["package.json", "pnpm-lock.yaml", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock"]
 
 "area: database":
   - changed-files:
-      - any-glob-to-any-file: "src-tauri/src/database.rs"
+      - any-glob-to-any-file: ["src-tauri/src/database.rs"]
 
 "area: voice":
   - changed-files:
-      - any-glob-to-any-file: "src-tauri/src/native_voice.rs"
-      - any-glob-to-any-file: "src-tauri/src/tts.rs"
-      - any-glob-to-any-file: "src-tauri/src/voice_biometrics.rs"
+      - any-glob-to-any-file: ["src-tauri/src/native_voice.rs", "src-tauri/src/tts.rs", "src-tauri/src/voice_biometrics.rs"]
 
 "area: integrations":
   - changed-files:
-      - any-glob-to-any-file: "src-tauri/src/spotify_*.rs"
-      - any-glob-to-any-file: "src-tauri/src/ha_*.rs"
-      - any-glob-to-any-file: "src-tauri/src/music_intent.rs"
-      - any-glob-to-any-file: "src-tauri/src/smarthome_intent.rs"
+      - any-glob-to-any-file: ["src-tauri/src/spotify_*.rs", "src-tauri/src/ha_*.rs", "src-tauri/src/music_intent.rs", "src-tauri/src/smarthome_intent.rs"]
 
 "area: ui":
   - changed-files:
-      - any-glob-to-any-file: "src/components/**/*"
-      - any-glob-to-any-file: "src/App.tsx"
+      - any-glob-to-any-file: ["src/components/**/*", "src/App.tsx"]
