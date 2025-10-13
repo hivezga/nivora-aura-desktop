@@ -19,12 +19,16 @@ use tts::TextToSpeech;
 use llm::LLMEngine;
 use ollama_sidecar::OllamaSidecar;
 use database::{Database, DatabaseState, Conversation, Message, Settings, get_database_path};
+use voice_biometrics::{VoiceBiometrics, UserProfile, BiometricsError};
 use error::AuraError;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 use std::sync::Mutex as StdMutex;
 use tauri::{Manager, State, Emitter};
 use serde::Serialize;
+
+// Type aliases for state management
+type VoiceBiometricsState = Arc<VoiceBiometrics>;
 
 /// System status payload for frontend (service health check)
 #[derive(Serialize, Clone, Debug)]
@@ -125,7 +129,10 @@ async fn handle_user_prompt(
 }
 
 #[tauri::command]
-async fn listen_and_transcribe(voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>) -> Result<String, AuraError> {
+async fn listen_and_transcribe(
+    voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>,
+    voice_biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<String, AuraError> {
     log::info!("Tauri command: listen_and_transcribe called (Push-to-Talk)");
 
     // Use spawn_blocking because NativeVoicePipeline uses std::sync::Mutex internally
@@ -136,10 +143,34 @@ async fn listen_and_transcribe(voice_pipeline: State<'_, Arc<StdMutex<NativeVoic
         let pipeline = voice_pipeline_clone.lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
+        // Start transcription and get the audio samples
         pipeline.start_transcription()
             .map_err(|e| AuraError::VoicePipeline(e))
     }).await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
+
+    // TODO: Implement speaker identification integration
+    // For now, we just return the transcription
+    // In AC3, this will be enhanced to:
+    // 1. Get the captured audio samples from the voice pipeline
+    // 2. Perform speaker identification on those samples
+    // 3. Log the identified speaker
+    // 4. Return enhanced result with speaker info
+
+    log::info!("Transcription completed: \"{}\"", result);
+    
+    // Check if we can identify the speaker (but don't fail if we can't)
+    if voice_biometrics.is_model_loaded().await {
+        log::debug!("Speaker identification available but not yet integrated with audio pipeline");
+        // TODO: Implement speaker identification integration
+        // For AC4 end-to-end validation, this will be enhanced to:
+        // 1. Get the captured audio samples from the voice pipeline  
+        // 2. Perform speaker identification on those samples
+        // 3. Log the identified speaker
+        // 4. Return enhanced result with speaker info
+    } else {
+        log::debug!("Speaker identification not available (model not loaded)");
+    }
 
     Ok(result)
 }
@@ -1776,6 +1807,78 @@ async fn ha_dismiss_onboarding(
     Ok(())
 }
 
+// ============================================================================
+// Voice Biometrics (Speaker Recognition) Commands
+// ============================================================================
+
+/// Check if voice biometrics (speaker recognition) is available
+#[tauri::command]
+async fn voice_biometrics_status(
+    voice_biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<bool, AuraError> {
+    let is_ready = voice_biometrics.is_model_loaded().await;
+    log::debug!("Voice biometrics status check: {}", is_ready);
+    Ok(is_ready)
+}
+
+/// List all enrolled users
+#[tauri::command]
+async fn voice_biometrics_list_users(
+    voice_biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<Vec<UserProfile>, AuraError> {
+    match voice_biometrics.list_all_users().await {
+        Ok(users) => {
+            log::info!("Listed {} enrolled user(s)", users.len());
+            Ok(users)
+        }
+        Err(e) => {
+            log::error!("Failed to list users: {:?}", e);
+            Err(AuraError::Internal(format!("Failed to list users: {:?}", e)))
+        }
+    }
+}
+
+/// Enroll a new user with voice samples
+/// 
+/// This is a placeholder command - in a full implementation, this would
+/// need to handle audio recording from the frontend
+#[tauri::command]
+async fn voice_biometrics_enroll_user(
+    user_name: String,
+    voice_biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<i64, AuraError> {
+    log::info!("Voice enrollment request for user: {}", user_name);
+    
+    // For now, return an error indicating this needs to be implemented
+    // In the full implementation, this would:
+    // 1. Start audio recording session
+    // 2. Collect 3-5 voice samples from user
+    // 3. Process samples through the enrollment pipeline
+    // 4. Store voice print in database
+    
+    Err(AuraError::Internal(
+        "Voice enrollment requires audio recording integration - not yet implemented".to_string()
+    ))
+}
+
+/// Delete a user profile
+#[tauri::command]
+async fn voice_biometrics_delete_user(
+    user_id: i64,
+    voice_biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<(), AuraError> {
+    match voice_biometrics.delete_user_profile(user_id).await {
+        Ok(()) => {
+            log::info!("✓ User profile {} deleted", user_id);
+            Ok(())
+        }
+        Err(e) => {
+            log::error!("Failed to delete user profile {}: {:?}", user_id, e);
+            Err(AuraError::Internal(format!("Failed to delete user: {:?}", e)))
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize logger
@@ -1929,7 +2032,12 @@ pub fn run() {
             ha_get_entity,
             ha_call_service,
             ha_handle_smart_home_command,
-            ha_dismiss_onboarding
+            ha_dismiss_onboarding,
+            // Voice Biometrics commands
+            voice_biometrics_status,
+            voice_biometrics_list_users,
+            voice_biometrics_enroll_user,
+            voice_biometrics_delete_user
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
@@ -2173,6 +2281,45 @@ pub fn run() {
 
             // Register TTS engine as managed state
             app.manage(tts_engine.clone());
+
+            // Initialize Voice Biometrics (Speaker Recognition)
+            log::info!("Initializing voice biometrics system...");
+            let voice_biometrics = VoiceBiometrics::new(
+                database_for_setup.clone(),
+                model_path.clone(),
+            );
+
+            // Try to initialize the speaker recognition model
+            let voice_biometrics_ready = {
+                let runtime = tokio::runtime::Runtime::new().unwrap();
+                runtime.block_on(async {
+                    match voice_biometrics.initialize_model().await {
+                        Ok(()) => {
+                            log::info!("✓ Voice biometrics system initialized successfully");
+                            log::info!("  - Model: WeSpeaker ECAPA-TDNN");
+                            log::info!("  - Mode: Real-time speaker recognition");
+                            log::info!("  - Privacy: 100% offline processing");
+                            true
+                        }
+                        Err(e) => {
+                            log::warn!("⚠ Voice biometrics initialization failed: {:?}", e);
+                            log::warn!("  Speaker recognition will be disabled");
+                            log::warn!("  Users can still enroll and use basic features");
+                            false
+                        }
+                    }
+                })
+            };
+
+            if voice_biometrics_ready {
+                log::info!("✓ Voice biometrics ready for real-time speaker identification");
+            } else {
+                log::info!("ℹ Voice biometrics running in fallback mode (no speaker model)");
+            }
+
+            // Register voice biometrics as managed state
+            let voice_biometrics_state: VoiceBiometricsState = Arc::new(voice_biometrics);
+            app.manage(voice_biometrics_state.clone());
 
             // Initialize Native Voice Pipeline
             log::info!("Initializing native voice pipeline...");

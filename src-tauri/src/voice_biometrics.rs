@@ -1,16 +1,16 @@
-/// Voice Biometrics Module - Speaker Recognition POC
+/// Voice Biometrics Module - Speaker Recognition with sherpa-rs Integration
 ///
 /// Provides speaker enrollment and identification using voice embeddings.
-/// This POC version uses simulated embeddings to validate the architecture.
-/// Full sherpa-rs integration will be added in the next phase.
+/// Uses sherpa-rs with WeSpeaker ECAPA-TDNN model for real-time speaker recognition.
 
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use chrono::Utc;
 use crate::database::Database;
+use sherpa_rs::speaker_id::{EmbeddingExtractor, ExtractorConfig};
+use std::path::PathBuf;
 
-/// Standard embedding dimension for speaker recognition models
-/// (WeSpeaker ECAPA-TDNN uses 192-dimensional embeddings)
+/// Standard embedding dimension for WeSpeaker ECAPA-TDNN model
 const EMBEDDING_DIM: usize = 192;
 
 /// Similarity threshold for speaker recognition (cosine similarity)
@@ -67,16 +67,65 @@ pub enum BiometricsError {
 /// Voice biometrics engine for speaker recognition
 pub struct VoiceBiometrics {
     database: Arc<Mutex<Database>>,
-    // Note: sherpa-rs model will be added here in full implementation
-    // model: Option<SpeakerEmbeddingExtractor>,
+    speaker_model: Arc<Mutex<Option<EmbeddingExtractor>>>,
+    model_path: PathBuf,
 }
 
 impl VoiceBiometrics {
     /// Create a new voice biometrics engine
-    pub fn new(database: Arc<Mutex<Database>>) -> Self {
+    pub fn new(database: Arc<Mutex<Database>>, model_path: PathBuf) -> Self {
         Self {
             database,
+            speaker_model: Arc::new(Mutex::new(None)),
+            model_path,
         }
+    }
+
+    /// Initialize the speaker embedding model
+    pub async fn initialize_model(&self) -> Result<(), BiometricsError> {
+        let model_file = self.model_path.join("wespeaker_en_voxceleb_CAM++.onnx");
+        
+        if !model_file.exists() {
+            log::error!("Speaker model not found at: {:?}", model_file);
+            log::info!("Please download the model using:");
+            log::info!("wget https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/wespeaker_en_voxceleb_CAM++.onnx -O {:?}", model_file);
+            return Err(BiometricsError::ModelNotLoaded);
+        }
+
+        log::info!("Loading WeSpeaker ECAPA-TDNN model from: {:?}", model_file);
+
+        let config = ExtractorConfig {
+            model: model_file.to_string_lossy().to_string(),
+            provider: Some("cpu".to_string()),
+            num_threads: Some(1),
+            debug: false,
+        };
+
+        match EmbeddingExtractor::new(config) {
+            Ok(extractor) => {
+                log::info!("✓ WeSpeaker ECAPA-TDNN model loaded successfully");
+                log::info!("  - Embedding dimension: {}", extractor.embedding_size);
+                
+                // Verify embedding dimension matches expected
+                if extractor.embedding_size != EMBEDDING_DIM {
+                    log::warn!("Model embedding dimension ({}) differs from expected ({})", 
+                              extractor.embedding_size, EMBEDDING_DIM);
+                }
+                
+                let mut model_lock = self.speaker_model.lock().await;
+                *model_lock = Some(extractor);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("Failed to load speaker model: {:?}", e);
+                Err(BiometricsError::ModelNotLoaded)
+            }
+        }
+    }
+
+    /// Check if the model is loaded and ready
+    pub async fn is_model_loaded(&self) -> bool {
+        self.speaker_model.lock().await.is_some()
     }
 
     /// Enroll a new user with voice samples
@@ -97,11 +146,16 @@ impl VoiceBiometrics {
             return Err(BiometricsError::InsufficientSamples(audio_samples.len()));
         }
 
-        // Extract embeddings from each sample
-        // POC: Use simulated embeddings for testing
+        // Ensure model is loaded
+        if !self.is_model_loaded().await {
+            return Err(BiometricsError::ModelNotLoaded);
+        }
+
+        // Extract embeddings from each sample using the real model
         let mut embeddings = Vec::new();
-        for (i, _audio) in audio_samples.iter().enumerate() {
-            let embedding = self.extract_embedding_poc(i)?;
+        for (i, audio) in audio_samples.iter().enumerate() {
+            log::debug!("Extracting embedding for sample {} ({} samples)", i + 1, audio.len());
+            let embedding = self.extract_embedding(audio).await?;
             embeddings.push(embedding);
         }
 
@@ -135,11 +189,15 @@ impl VoiceBiometrics {
     /// Matched user profile if similarity exceeds threshold, None otherwise
     pub async fn identify_speaker(
         &self,
-        _audio: &[f32],
+        audio: &[f32],
     ) -> Result<Option<UserProfile>, BiometricsError> {
-        // Extract embedding from audio
-        // POC: Use simulated embedding
-        let query_embedding = self.extract_embedding_poc(0)?;
+        // Ensure model is loaded
+        if !self.is_model_loaded().await {
+            return Err(BiometricsError::ModelNotLoaded);
+        }
+
+        // Extract embedding from audio using the real model
+        let query_embedding = self.extract_embedding(audio).await?;
 
         // Load all active user profiles
         let profiles = self.get_active_user_profiles().await?;
@@ -154,6 +212,8 @@ impl VoiceBiometrics {
 
         for profile in profiles {
             let similarity = Self::cosine_similarity(&query_embedding, &profile.voice_print_embedding);
+
+            log::debug!("User '{}': similarity = {:.3}", profile.name, similarity);
 
             if similarity > best_similarity {
                 best_similarity = similarity;
@@ -183,25 +243,43 @@ impl VoiceBiometrics {
         }
     }
 
-    /// Extract speaker embedding from audio (POC version with simulated data)
+    /// Extract speaker embedding from audio using WeSpeaker ECAPA-TDNN model
     ///
-    /// In full implementation, this will use sherpa-rs to extract real embeddings.
-    /// For POC, we generate deterministic pseudo-random embeddings.
-    fn extract_embedding_poc(&self, sample_id: usize) -> Result<Vec<f32>, BiometricsError> {
-        // Generate a deterministic "embedding" for testing
-        // In reality, this would be: sherpa_model.compute_speaker_embedding(audio)
-        let mut embedding = vec![0.0f32; EMBEDDING_DIM];
+    /// # Arguments
+    /// * `audio` - Audio samples (PCM f32, 16kHz mono)
+    ///
+    /// # Returns
+    /// 192-dimensional embedding vector representing speaker characteristics
+    async fn extract_embedding(&self, audio: &[f32]) -> Result<Vec<f32>, BiometricsError> {
+        let mut model_lock = self.speaker_model.lock().await;
+        let model = model_lock.as_mut()
+            .ok_or(BiometricsError::ModelNotLoaded)?;
 
-        // Create a simple pattern based on sample_id
-        let seed = sample_id as f32;
-        for (i, val) in embedding.iter_mut().enumerate() {
-            *val = ((i as f32 + seed) * 0.01).sin();
+        // The sherpa-rs API expects 16kHz mono audio
+        let sample_rate = 16000;
+        
+        log::debug!("Extracting embedding from {} samples ({:.2}s of audio)", 
+                   audio.len(), audio.len() as f32 / sample_rate as f32);
+
+        // Create embedding using sherpa-rs
+        match model.compute_speaker_embedding(audio.to_vec(), sample_rate) {
+            Ok(embedding) => {
+                // Verify embedding dimension
+                if embedding.len() != model.embedding_size {
+                    return Err(BiometricsError::InvalidEmbeddingDim(
+                        model.embedding_size,
+                        embedding.len(),
+                    ));
+                }
+
+                log::debug!("✓ Extracted {}-dimensional embedding", embedding.len());
+                Ok(embedding)
+            }
+            Err(e) => {
+                log::error!("Failed to compute embedding: {:?}", e);
+                Err(BiometricsError::AudioProcessing(format!("Embedding computation failed: {:?}", e)))
+            }
         }
-
-        // Normalize to unit vector (required for cosine similarity)
-        Self::normalize_embedding(&mut embedding);
-
-        Ok(embedding)
     }
 
     /// Average multiple embeddings to create a robust voice print
