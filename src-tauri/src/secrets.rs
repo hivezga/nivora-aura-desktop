@@ -343,4 +343,216 @@ mod tests {
         let result = load_api_key().unwrap();
         assert_eq!(result, "");
     }
+
+    #[test]
+    fn test_user_scoped_tokens() {
+        let user_id = 123;
+        let test_token = "test-user-token";
+        
+        // Save user token
+        save_user_spotify_access_token(user_id, test_token).unwrap();
+        
+        // Load user token
+        let loaded = load_user_spotify_access_token(user_id).unwrap();
+        assert_eq!(loaded, test_token);
+        
+        // Check connection status
+        assert!(is_user_spotify_connected(user_id));
+        
+        // Cleanup
+        delete_user_spotify_tokens(user_id).unwrap();
+        
+        // Verify deletion
+        assert!(!is_user_spotify_connected(user_id));
+    }
+}
+
+// =============================================================================
+// Multi-User Spotify Token Management
+// =============================================================================
+
+/// Generate user-scoped keyring entry name
+fn get_user_scoped_key(base_key: &str, user_id: i64) -> String {
+    format!("{}_{}", base_key, user_id)
+}
+
+/// Get user-scoped Spotify access token key
+fn get_spotify_access_token_key(user_id: i64) -> String {
+    get_user_scoped_key(SPOTIFY_ACCESS_TOKEN, user_id)
+}
+
+/// Get user-scoped Spotify refresh token key
+fn get_spotify_refresh_token_key(user_id: i64) -> String {
+    get_user_scoped_key(SPOTIFY_REFRESH_TOKEN, user_id)
+}
+
+/// Get user-scoped Spotify token expiry key
+fn get_spotify_token_expiry_key(user_id: i64) -> String {
+    get_user_scoped_key(SPOTIFY_TOKEN_EXPIRY, user_id)
+}
+
+/// Save user-scoped Spotify access token to OS keyring
+pub fn save_user_spotify_access_token(user_id: i64, token: &str) -> Result<(), String> {
+    log::info!("Saving Spotify access token for user {} to OS keyring", user_id);
+
+    let key_name = get_spotify_access_token_key(user_id);
+    let entry = Entry::new(SERVICE_NAME, &key_name)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    entry
+        .set_password(token)
+        .map_err(|e| format!("Failed to save user Spotify access token: {}", e))?;
+
+    log::debug!("User {} Spotify access token saved successfully", user_id);
+    Ok(())
+}
+
+/// Load user-scoped Spotify access token from OS keyring
+pub fn load_user_spotify_access_token(user_id: i64) -> Result<String, String> {
+    log::debug!("Loading Spotify access token for user {} from OS keyring", user_id);
+
+    let key_name = get_spotify_access_token_key(user_id);
+    let entry = Entry::new(SERVICE_NAME, &key_name)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    match entry.get_password() {
+        Ok(token) => {
+            log::debug!("User {} Spotify access token loaded successfully", user_id);
+            Ok(token)
+        }
+        Err(keyring::Error::NoEntry) => {
+            Err(format!("No Spotify access token found for user {}", user_id))
+        }
+        Err(e) => {
+            log::warn!("Failed to load Spotify access token for user {}: {}", user_id, e);
+            Err(format!("Failed to load user Spotify access token: {}", e))
+        }
+    }
+}
+
+/// Save user-scoped Spotify refresh token to OS keyring
+pub fn save_user_spotify_refresh_token(user_id: i64, token: &str) -> Result<(), String> {
+    log::info!("Saving Spotify refresh token for user {} to OS keyring", user_id);
+
+    let key_name = get_spotify_refresh_token_key(user_id);
+    let entry = Entry::new(SERVICE_NAME, &key_name)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    entry
+        .set_password(token)
+        .map_err(|e| format!("Failed to save user Spotify refresh token: {}", e))?;
+
+    log::debug!("User {} Spotify refresh token saved successfully", user_id);
+    Ok(())
+}
+
+/// Load user-scoped Spotify refresh token from OS keyring
+pub fn load_user_spotify_refresh_token(user_id: i64) -> Result<String, String> {
+    log::debug!("Loading Spotify refresh token for user {} from OS keyring", user_id);
+
+    let key_name = get_spotify_refresh_token_key(user_id);
+    let entry = Entry::new(SERVICE_NAME, &key_name)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    match entry.get_password() {
+        Ok(token) => {
+            log::debug!("User {} Spotify refresh token loaded successfully", user_id);
+            Ok(token)
+        }
+        Err(keyring::Error::NoEntry) => {
+            Err(format!("No Spotify refresh token found for user {}", user_id))
+        }
+        Err(e) => {
+            log::warn!("Failed to load Spotify refresh token for user {}: {}", user_id, e);
+            Err(format!("Failed to load user Spotify refresh token: {}", e))
+        }
+    }
+}
+
+/// Save user-scoped Spotify token expiry to OS keyring
+pub fn save_user_spotify_token_expiry(user_id: i64, expiry: &chrono::DateTime<chrono::Utc>) -> Result<(), String> {
+    log::info!("Saving Spotify token expiry for user {} to OS keyring", user_id);
+
+    let key_name = get_spotify_token_expiry_key(user_id);
+    let entry = Entry::new(SERVICE_NAME, &key_name)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    entry
+        .set_password(&expiry.to_rfc3339())
+        .map_err(|e| format!("Failed to save user Spotify token expiry: {}", e))?;
+
+    log::debug!("User {} Spotify token expiry saved successfully", user_id);
+    Ok(())
+}
+
+/// Load user-scoped Spotify token expiry from OS keyring
+pub fn load_user_spotify_token_expiry(user_id: i64) -> Result<chrono::DateTime<chrono::Utc>, String> {
+    log::debug!("Loading Spotify token expiry for user {} from OS keyring", user_id);
+
+    let key_name = get_spotify_token_expiry_key(user_id);
+    let entry = Entry::new(SERVICE_NAME, &key_name)
+        .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
+
+    match entry.get_password() {
+        Ok(expiry_str) => {
+            match chrono::DateTime::parse_from_rfc3339(&expiry_str) {
+                Ok(dt) => {
+                    log::debug!("User {} Spotify token expiry loaded successfully", user_id);
+                    Ok(dt.with_timezone(&chrono::Utc))
+                }
+                Err(e) => Err(format!("Failed to parse expiry timestamp: {}", e))
+            }
+        }
+        Err(keyring::Error::NoEntry) => {
+            Err(format!("No Spotify token expiry found for user {}", user_id))
+        }
+        Err(e) => {
+            log::warn!("Failed to load Spotify token expiry for user {}: {}", user_id, e);
+            Err(format!("Failed to load user Spotify token expiry: {}", e))
+        }
+    }
+}
+
+/// Delete all Spotify tokens for a specific user
+pub fn delete_user_spotify_tokens(user_id: i64) -> Result<(), String> {
+    log::info!("Deleting all Spotify tokens for user {}", user_id);
+
+    // Best-effort deletion - don't fail if some tokens don't exist
+    let access_key = get_spotify_access_token_key(user_id);
+    if let Ok(entry) = Entry::new(SERVICE_NAME, &access_key) {
+        let _ = entry.delete_credential();
+    }
+
+    let refresh_key = get_spotify_refresh_token_key(user_id);
+    if let Ok(entry) = Entry::new(SERVICE_NAME, &refresh_key) {
+        let _ = entry.delete_credential();
+    }
+
+    let expiry_key = get_spotify_token_expiry_key(user_id);
+    if let Ok(entry) = Entry::new(SERVICE_NAME, &expiry_key) {
+        let _ = entry.delete_credential();
+    }
+
+    log::info!("Spotify tokens deleted for user {}", user_id);
+    Ok(())
+}
+
+/// List all users who have Spotify tokens stored
+/// 
+/// This scans the keyring for user-scoped Spotify access tokens
+/// and returns the user IDs of those who have tokens stored
+pub fn list_users_with_spotify() -> Result<Vec<i64>, String> {
+    // Note: This is a basic implementation that would need platform-specific
+    // keyring enumeration to work fully. For now, we'll rely on database
+    // tracking of connected users.
+    log::debug!("Listing users with Spotify tokens (placeholder implementation)");
+    
+    // In a full implementation, this would enumerate keyring entries
+    // and extract user IDs from the key names
+    Ok(vec![])
+}
+
+/// Check if a specific user has Spotify tokens
+pub fn is_user_spotify_connected(user_id: i64) -> bool {
+    load_user_spotify_access_token(user_id).is_ok()
 }
