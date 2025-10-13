@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use log::{info, error, warn, debug};
 use whisper_rs::{WhisperContext, WhisperContextParameters, FullParams, SamplingStrategy};
+use serde::Serialize;
 
 // Audio configuration constants
 const SAMPLE_RATE: u32 = 16000;  // Required by whisper-rs
@@ -45,6 +46,32 @@ pub enum VoiceState {
     Transcribing,
     /// Assistant is speaking (TTS active) - wake word detection disabled to prevent feedback loop
     Speaking,
+}
+
+/// Enhanced transcription result with speaker identification
+#[derive(Debug, Clone, Serialize)]
+pub struct TranscriptionResult {
+    /// The transcribed text
+    pub text: String,
+    /// Audio duration in seconds
+    pub duration_seconds: f32,
+    /// Number of audio samples processed
+    pub sample_count: usize,
+    /// Speaker identification results (if available)
+    pub speaker_info: Option<SpeakerInfo>,
+}
+
+/// Speaker identification information
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeakerInfo {
+    /// Identified user ID (if recognized)
+    pub user_id: Option<i64>,
+    /// Identified user name (if recognized)  
+    pub user_name: Option<String>,
+    /// Similarity score (0.0 to 1.0)
+    pub similarity_score: f32,
+    /// Whether identification was successful
+    pub identified: bool,
 }
 
 /// Voice pipeline state
@@ -535,6 +562,45 @@ impl NativeVoicePipeline {
 
         // Return the transcription result (propagate any errors)
         transcription_result
+    }
+
+    /// Get the last captured audio samples for speaker identification
+    /// 
+    /// This method allows external components to access the audio buffer
+    /// for speaker identification after transcription is complete
+    pub fn get_last_audio_samples(&self) -> Vec<f32> {
+        let buffer = self.recording_buffer.lock().unwrap();
+        buffer.clone()
+    }
+
+    /// Get captured audio samples and preserve them during transcription
+    /// 
+    /// This method extracts and preserves audio samples before they're cleared
+    /// Used internally during transcription to enable speaker identification
+    pub fn extract_and_preserve_audio_samples(&self) -> (Vec<f32>, f32, f32) {
+        let buffer = self.recording_buffer.lock().unwrap();
+        let samples = buffer.clone();
+        let duration = samples.len() as f32 / SAMPLE_RATE as f32;
+        let avg_energy = if !samples.is_empty() {
+            calculate_rms_energy(&samples)
+        } else {
+            0.0
+        };
+        (samples, duration, avg_energy)
+    }
+
+    /// Get audio metadata from the last recording
+    /// 
+    /// Returns (sample_count, duration_seconds, average_energy)
+    pub fn get_last_audio_metadata(&self) -> (usize, f32, f32) {
+        let samples = self.get_last_audio_samples();
+        let duration = samples.len() as f32 / SAMPLE_RATE as f32;
+        let avg_energy = if !samples.is_empty() {
+            calculate_rms_energy(&samples)
+        } else {
+            0.0
+        };
+        (samples.len(), duration, avg_energy)
     }
 
     /// Transcribe audio samples using Whisper
