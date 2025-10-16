@@ -53,7 +53,7 @@ which = "8.0"  # Check if executables exist in PATH
 searxng = "0.1.0"  # SearXNG client for privacy-focused web search
 
 # Spotify Music Integration
-oauth2 = "4.4"  # OAuth2 client for Spotify authentication with PKCE support
+oauth2 = "5.0"  # OAuth2 client for Spotify authentication with PKCE support
 url = "2.5"  # URL parsing and manipulation
 tiny_http = "0.12"  # Lightweight HTTP server for OAuth2 callback
 regex = "1.10"  # Regular expressions for music intent parsing
