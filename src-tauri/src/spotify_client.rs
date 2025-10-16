@@ -177,21 +177,45 @@ struct PlayRequest {
 pub struct SpotifyClient {
     http_client: reqwest::Client,
     client_id: String,
+    user_id: Option<i64>, // NEW: User context for multi-user support
 }
 
 impl SpotifyClient {
-    /// Create a new Spotify client
+    /// Create a new Spotify client for a specific user
     ///
-    /// The client ID is required for token refresh operations.
+    /// This is the preferred constructor for multi-user support.
+    /// The client will use user-scoped tokens for all operations.
+    pub fn new_for_user(client_id: String, user_id: i64) -> Result<Self, SpotifyError> {
+        let http_client = reqwest::Client::builder()
+            .timeout(StdDuration::from_secs(30))
+            .build()
+            .map_err(|e| SpotifyError::NetworkError(e.to_string()))?;
+
+        log::debug!("Created Spotify client for user {}", user_id);
+
+        Ok(Self {
+            http_client,
+            client_id,
+            user_id: Some(user_id),
+        })
+    }
+
+    /// Create a new Spotify client (legacy mode)
+    ///
+    /// This constructor maintains backward compatibility during migration.
+    /// It uses global tokens and should be deprecated once all users migrate.
     pub fn new(client_id: String) -> Result<Self, SpotifyError> {
         let http_client = reqwest::Client::builder()
             .timeout(StdDuration::from_secs(30))
             .build()
             .map_err(|e| SpotifyError::NetworkError(e.to_string()))?;
 
+        log::debug!("Created Spotify client in legacy mode (global tokens)");
+
         Ok(Self {
             http_client,
             client_id,
+            user_id: None, // Legacy mode
         })
     }
 
@@ -199,7 +223,47 @@ impl SpotifyClient {
     ///
     /// This method checks if the current token is expired or will expire soon
     /// (within 5 minutes), and automatically refreshes it if needed.
+    /// Uses user-scoped tokens if user_id is present, otherwise falls back to global tokens.
     async fn get_valid_token(&self) -> Result<String, SpotifyError> {
+        if let Some(user_id) = self.user_id {
+            // Use user-scoped token management
+            self.get_valid_user_token(user_id).await
+        } else {
+            // Legacy global token management
+            self.get_valid_global_token().await
+        }
+    }
+
+    /// Get valid token for specific user (multi-user mode)
+    async fn get_valid_user_token(&self, user_id: i64) -> Result<String, SpotifyError> {
+        log::debug!("Getting valid token for user {}", user_id);
+
+        // Load current user token
+        let access_token = crate::secrets::load_user_spotify_access_token(user_id)
+            .map_err(|_| SpotifyError::NotAuthenticated)?;
+
+        // Check expiry
+        let expiry = crate::secrets::load_user_spotify_token_expiry(user_id)
+            .map_err(|_| SpotifyError::NotAuthenticated)?;
+
+        let now = Utc::now();
+
+        // Refresh if expired or expiring soon
+        if expiry < now + TOKEN_REFRESH_BUFFER {
+            log::info!("User {} Spotify token expired or expiring soon, refreshing...", user_id);
+            self.refresh_user_token(user_id).await?;
+
+            // Load the new token
+            crate::secrets::load_user_spotify_access_token(user_id)
+                .map_err(|_| SpotifyError::NotAuthenticated)
+        } else {
+            log::debug!("User {} Spotify token is still valid (expires at {})", user_id, expiry);
+            Ok(access_token)
+        }
+    }
+
+    /// Get valid token for legacy global mode
+    async fn get_valid_global_token(&self) -> Result<String, SpotifyError> {
         // Load current token
         let access_token = secrets::load_spotify_access_token()
             .map_err(|_| SpotifyError::NotAuthenticated)?;
@@ -213,7 +277,7 @@ impl SpotifyClient {
         // Refresh if expired or expiring soon
         if expiry < now + TOKEN_REFRESH_BUFFER {
             log::info!("Spotify token expired or expiring soon, refreshing...");
-            self.refresh_token().await?;
+            self.refresh_global_token().await?;
 
             // Load the new token
             secrets::load_spotify_access_token()
@@ -226,6 +290,44 @@ impl SpotifyClient {
 
     /// Refresh the access token using the refresh token
     async fn refresh_token(&self) -> Result<(), SpotifyError> {
+        if let Some(user_id) = self.user_id {
+            self.refresh_user_token(user_id).await
+        } else {
+            self.refresh_global_token().await
+        }
+    }
+
+    /// Refresh token for specific user (multi-user mode)
+    async fn refresh_user_token(&self, user_id: i64) -> Result<(), SpotifyError> {
+        log::info!("Refreshing Spotify access token for user {}", user_id);
+
+        let refresh_token = crate::secrets::load_user_spotify_refresh_token(user_id)
+            .map_err(|_| SpotifyError::NotAuthenticated)?;
+
+        let auth = SpotifyAuth::new(self.client_id.clone());
+        let token_response = auth.refresh_access_token(&refresh_token).await?;
+
+        // Save new access token
+        crate::secrets::save_user_spotify_access_token(user_id, &token_response.access_token)
+            .map_err(|e| SpotifyError::TokenRefreshFailed(e))?;
+
+        // Calculate and save new expiry
+        let expiry = calculate_token_expiry(token_response.expires_in);
+        crate::secrets::save_user_spotify_token_expiry(user_id, &expiry)
+            .map_err(|e| SpotifyError::TokenRefreshFailed(e))?;
+
+        // Update refresh token if provided (not always included in refresh response)
+        if let Some(new_refresh_token) = token_response.refresh_token {
+            crate::secrets::save_user_spotify_refresh_token(user_id, &new_refresh_token)
+                .map_err(|e| SpotifyError::TokenRefreshFailed(e))?;
+        }
+
+        log::info!("Successfully refreshed Spotify token for user {}", user_id);
+        Ok(())
+    }
+
+    /// Refresh token for legacy global mode
+    async fn refresh_global_token(&self) -> Result<(), SpotifyError> {
         log::info!("Refreshing Spotify access token");
 
         let refresh_token = secrets::load_spotify_refresh_token()
