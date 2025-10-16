@@ -972,11 +972,38 @@ impl Database {
     }
 
     /// Prepare and execute a query that returns multiple rows
-    pub fn query_map_sql<T, F>(&self, sql: &str, params: &[&dyn rusqlite::ToSql], f: F) -> Result<Vec<T>, String>
+    pub fn query_map_sql<T, F>(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+        f: F,
+    ) -> Result<Vec<T>, String>
     where
         F: Fn(&rusqlite::Row) -> rusqlite::Result<T>,
+    {
+        let mut stmt = self
+            .conn
+            .prepare(sql)
+            .map_err(|e| format!("Failed to prepare statement: {}", e))?;
+
+        let rows = stmt
+            .query_map(params, f)
+            .map_err(|e| format!("Query execution failed: {}", e))?;
+
+        let mut results = Vec::new();
+        for row in rows {
+            results.push(row.map_err(|e| format!("Row processing failed: {}", e))?);
+        }
+
+        Ok(results)
+    }
+
     /// Execute a query and return the last insert row ID (for voice biometrics)
-    pub fn execute_and_get_last_id(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<i64, String> {
+    pub fn execute_and_get_last_id(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<i64, String> {
         self.conn
             .execute(sql, params)
             .map_err(|e| format!("Database execute error: {}", e))?;
@@ -984,36 +1011,30 @@ impl Database {
     }
 
     /// Execute a query (for voice biometrics)
-    pub fn execute_query(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> Result<usize, String> {
+    pub fn execute_query(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+    ) -> Result<usize, String> {
         self.conn
             .execute(sql, params)
             .map_err(|e| format!("Database execute error: {}", e))
     }
 
     /// Prepare and execute a query that returns rows (for voice biometrics)
-    pub fn query_rows<T, F>(&self, sql: &str, params: &[&dyn rusqlite::ToSql], mapper: F) -> Result<Vec<T>, String>
+    pub fn query_rows<T, F>(
+        &self,
+        sql: &str,
+        params: &[&dyn rusqlite::ToSql],
+        mapper: F,
+    ) -> Result<Vec<T>, String>
     where
         F: Fn(&rusqlite::Row) -> Result<T, rusqlite::Error>,
     {
-        let mut stmt = self.conn
+        let mut stmt = self
+            .conn
             .prepare(sql)
             .map_err(|e| format!("Failed to prepare statement: {}", e))?;
-        
-        let rows = stmt
-            .query_map(params, f)
-            .map_err(|e| format!("Query execution failed: {}", e))?;
-        
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row.map_err(|e| format!("Row processing failed: {}", e))?);
-        }
-        
-        Ok(results)
-    }
-
-    /// Get the last inserted row ID
-    pub fn last_insert_rowid(&self) -> i64 {
-        self.conn.last_insert_rowid()
 
         let rows = stmt
             .query_map(params, mapper)
@@ -1025,6 +1046,11 @@ impl Database {
         }
 
         Ok(results)
+    }
+
+    /// Get the last inserted row ID
+    pub fn last_insert_rowid(&self) -> i64 {
+        self.conn.last_insert_rowid()
     }
 }
 
