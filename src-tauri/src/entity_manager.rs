@@ -1,19 +1,18 @@
+use chrono::{DateTime, Utc};
 /// Entity Manager for Home Assistant Integration
 ///
 /// Provides entity caching, state management, and indexing for efficient queries.
 /// Entities are synchronized via WebSocket state_changed events and periodic full syncs.
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use chrono::{DateTime, Utc};
 
 /// Represents a Home Assistant entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entity {
-    pub entity_id: String,              // e.g., "light.kitchen"
-    pub state: String,                   // e.g., "on", "off", "unavailable"
+    pub entity_id: String, // e.g., "light.kitchen"
+    pub state: String,     // e.g., "on", "off", "unavailable"
     pub attributes: EntityAttributes,
     pub last_changed: DateTime<Utc>,
     pub last_updated: DateTime<Utc>,
@@ -22,27 +21,27 @@ pub struct Entity {
 /// Entity attributes (domain-specific)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityAttributes {
-    pub friendly_name: Option<String>,   // e.g., "Kitchen Light"
-    pub area_id: Option<String>,         // e.g., "kitchen" (lowercase, normalized)
-    pub device_class: Option<String>,    // e.g., "temperature", "motion"
+    pub friendly_name: Option<String>, // e.g., "Kitchen Light"
+    pub area_id: Option<String>,       // e.g., "kitchen" (lowercase, normalized)
+    pub device_class: Option<String>,  // e.g., "temperature", "motion"
 
     // Domain-specific attributes (lights)
-    pub brightness: Option<u8>,          // 0-255
-    pub rgb_color: Option<Vec<u8>>,      // [R, G, B]
-    pub color_temp: Option<u16>,         // Mireds
+    pub brightness: Option<u8>,     // 0-255
+    pub rgb_color: Option<Vec<u8>>, // [R, G, B]
+    pub color_temp: Option<u16>,    // Mireds
 
     // Domain-specific attributes (sensors)
     pub unit_of_measurement: Option<String>, // e.g., "°F", "%"
-    pub temperature: Option<f32>,        // Temperature value
-    pub humidity: Option<f32>,           // Humidity value
+    pub temperature: Option<f32>,            // Temperature value
+    pub humidity: Option<f32>,               // Humidity value
 
     // Domain-specific attributes (climate)
-    pub hvac_mode: Option<String>,       // e.g., "heat", "cool", "auto"
+    pub hvac_mode: Option<String>, // e.g., "heat", "cool", "auto"
     pub current_temperature: Option<f32>,
     pub target_temperature: Option<f32>,
 
     // Domain-specific attributes (covers)
-    pub current_position: Option<u8>,    // 0-100 (blinds, garage doors)
+    pub current_position: Option<u8>, // 0-100 (blinds, garage doors)
 
     // Generic attributes (catch-all for other domains)
     #[serde(flatten)]
@@ -59,10 +58,10 @@ pub struct StateChangedEvent {
 /// Filter for querying entities
 #[derive(Debug, Clone, Default)]
 pub struct EntityFilter {
-    pub domain: Option<String>,           // e.g., "light", "sensor"
-    pub area: Option<String>,             // e.g., "kitchen", "bedroom"
-    pub device_class: Option<String>,     // e.g., "temperature", "motion"
-    pub state: Option<String>,            // e.g., "on", "off"
+    pub domain: Option<String>,       // e.g., "light", "sensor"
+    pub area: Option<String>,         // e.g., "kitchen", "bedroom"
+    pub device_class: Option<String>, // e.g., "temperature", "motion"
+    pub state: Option<String>,        // e.g., "on", "off"
 }
 
 /// Entity Manager - manages entity cache and indexing
@@ -71,8 +70,8 @@ pub struct EntityManager {
     entities: Arc<RwLock<HashMap<String, Entity>>>,
 
     // Indexes for fast lookups
-    area_index: Arc<RwLock<HashMap<String, Vec<String>>>>,     // area_id -> entity_ids
-    domain_index: Arc<RwLock<HashMap<String, Vec<String>>>>,   // domain -> entity_ids
+    area_index: Arc<RwLock<HashMap<String, Vec<String>>>>, // area_id -> entity_ids
+    domain_index: Arc<RwLock<HashMap<String, Vec<String>>>>, // domain -> entity_ids
 }
 
 impl EntityManager {
@@ -112,7 +111,11 @@ impl EntityManager {
     ///
     /// Updates a single entity in the cache and updates indexes if needed.
     pub async fn handle_state_change(&self, event: StateChangedEvent) {
-        log::debug!("State changed: {} -> {}", event.entity_id, event.new_state.state);
+        log::debug!(
+            "State changed: {} -> {}",
+            event.entity_id,
+            event.new_state.state
+        );
 
         let entity_id = event.entity_id.clone();
         let new_entity = event.new_state;
@@ -163,7 +166,7 @@ impl EntityManager {
                 // Filter by area (if not already filtered by index)
                 if let Some(ref area) = filter.area {
                     match &entity.attributes.area_id {
-                        Some(entity_area) if entity_area == area => {},
+                        Some(entity_area) if entity_area == area => {}
                         _ => return false,
                     }
                 }
@@ -171,7 +174,7 @@ impl EntityManager {
                 // Filter by device_class
                 if let Some(ref device_class) = filter.device_class {
                     match &entity.attributes.device_class {
-                        Some(entity_class) if entity_class == device_class => {},
+                        Some(entity_class) if entity_class == device_class => {}
                         _ => return false,
                     }
                 }
@@ -276,9 +279,7 @@ impl EntityManager {
         // Update area index
         if let Some(area_id) = &entity.attributes.area_id {
             let mut area_index = self.area_index.write().await;
-            let entry = area_index
-                .entry(area_id.clone())
-                .or_insert_with(Vec::new);
+            let entry = area_index.entry(area_id.clone()).or_insert_with(Vec::new);
 
             if !entry.contains(&entity_id.to_string()) {
                 entry.push(entity_id.to_string());
@@ -353,10 +354,12 @@ mod tests {
 
         manager.sync_entities(entities).await.unwrap();
 
-        let lights = manager.query_entities(EntityFilter {
-            domain: Some("light".to_string()),
-            ..Default::default()
-        }).await;
+        let lights = manager
+            .query_entities(EntityFilter {
+                domain: Some("light".to_string()),
+                ..Default::default()
+            })
+            .await;
 
         assert_eq!(lights.len(), 2);
     }
@@ -373,10 +376,12 @@ mod tests {
 
         manager.sync_entities(entities).await.unwrap();
 
-        let kitchen_entities = manager.query_entities(EntityFilter {
-            area: Some("kitchen".to_string()),
-            ..Default::default()
-        }).await;
+        let kitchen_entities = manager
+            .query_entities(EntityFilter {
+                area: Some("kitchen".to_string()),
+                ..Default::default()
+            })
+            .await;
 
         assert_eq!(kitchen_entities.len(), 2);
     }
@@ -385,9 +390,7 @@ mod tests {
     async fn test_state_change() {
         let manager = EntityManager::new();
 
-        let entities = vec![
-            create_test_entity("light.kitchen", "off", Some("kitchen")),
-        ];
+        let entities = vec![create_test_entity("light.kitchen", "off", Some("kitchen"))];
 
         manager.sync_entities(entities).await.unwrap();
 
@@ -406,14 +409,20 @@ mod tests {
     #[test]
     fn test_extract_domain() {
         assert_eq!(extract_domain("light.kitchen"), Some("light".to_string()));
-        assert_eq!(extract_domain("sensor.temperature"), Some("sensor".to_string()));
+        assert_eq!(
+            extract_domain("sensor.temperature"),
+            Some("sensor".to_string())
+        );
         assert_eq!(extract_domain("invalid"), None);
     }
 
     #[test]
     fn test_extract_name() {
         assert_eq!(extract_name("light.kitchen"), Some("kitchen".to_string()));
-        assert_eq!(extract_name("sensor.temperature"), Some("temperature".to_string()));
+        assert_eq!(
+            extract_name("sensor.temperature"),
+            Some("temperature".to_string())
+        );
         assert_eq!(extract_name("invalid"), None);
     }
 }

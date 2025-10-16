@@ -1,15 +1,14 @@
+use crate::entity_manager::{Entity, EntityManager, StateChangedEvent};
 /// Home Assistant Client - WebSocket + REST API
 ///
 /// Provides real-time communication with Home Assistant via WebSocket for state updates
 /// and REST API for service calls and entity queries.
-
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_tungstenite::{connect_async, tungstenite::protocol::Message};
-use crate::entity_manager::{Entity, EntityManager, StateChangedEvent};
 
 /// Home Assistant client with WebSocket and REST API support
 pub struct HomeAssistantClient {
@@ -43,10 +42,7 @@ enum HAMessage {
     },
 
     #[serde(rename = "event")]
-    Event {
-        id: u64,
-        event: EventData,
-    },
+    Event { id: u64, event: EventData },
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,7 +85,10 @@ impl HomeAssistantClient {
         log::info!("Connecting to Home Assistant at {}", self.base_url);
 
         // Convert http:// to ws:// or https:// to wss://
-        let ws_url = self.base_url.replace("http://", "ws://").replace("https://", "wss://");
+        let ws_url = self
+            .base_url
+            .replace("http://", "ws://")
+            .replace("https://", "wss://");
         let ws_url = format!("{}/api/websocket", ws_url);
 
         log::debug!("WebSocket URL: {}", ws_url);
@@ -106,7 +105,9 @@ impl HomeAssistantClient {
         // Step 1: Wait for auth_required message
         if let Some(msg) = read.next().await {
             let msg = msg.map_err(|e| format!("Failed to receive auth_required: {}", e))?;
-            let text = msg.to_text().map_err(|e| format!("Invalid message format: {}", e))?;
+            let text = msg
+                .to_text()
+                .map_err(|e| format!("Invalid message format: {}", e))?;
 
             log::debug!("Received: {}", text);
 
@@ -139,7 +140,9 @@ impl HomeAssistantClient {
         // Step 3: Wait for auth_ok or auth_invalid
         if let Some(msg) = read.next().await {
             let msg = msg.map_err(|e| format!("Failed to receive auth response: {}", e))?;
-            let text = msg.to_text().map_err(|e| format!("Invalid message format: {}", e))?;
+            let text = msg
+                .to_text()
+                .map_err(|e| format!("Invalid message format: {}", e))?;
 
             log::debug!("Received: {}", text);
 
@@ -176,7 +179,9 @@ impl HomeAssistantClient {
         // Wait for subscription confirmation
         if let Some(msg) = read.next().await {
             let msg = msg.map_err(|e| format!("Failed to receive subscription response: {}", e))?;
-            let text = msg.to_text().map_err(|e| format!("Invalid message format: {}", e))?;
+            let text = msg
+                .to_text()
+                .map_err(|e| format!("Invalid message format: {}", e))?;
 
             log::debug!("Received: {}", text);
 
@@ -187,7 +192,11 @@ impl HomeAssistantClient {
                 HAMessage::Result { success: true, .. } => {
                     log::info!("✓ Subscribed to state_changed events");
                 }
-                HAMessage::Result { success: false, error, .. } => {
+                HAMessage::Result {
+                    success: false,
+                    error,
+                    ..
+                } => {
                     return Err(format!("Subscription failed: {:?}", error));
                 }
                 _ => return Err("Expected result message for subscription".to_string()),
@@ -220,8 +229,14 @@ impl HomeAssistantClient {
                                     HAMessage::Event { event, .. } => {
                                         if event.event_type == "state_changed" {
                                             // Parse state_changed event
-                                            if let Ok(state_event) = serde_json::from_value::<StateChangedEvent>(event.data.clone()) {
-                                                entity_manager.handle_state_change(state_event).await;
+                                            if let Ok(state_event) =
+                                                serde_json::from_value::<StateChangedEvent>(
+                                                    event.data.clone(),
+                                                )
+                                            {
+                                                entity_manager
+                                                    .handle_state_change(state_event)
+                                                    .await;
                                             } else {
                                                 log::warn!("Failed to parse state_changed event");
                                             }
@@ -359,7 +374,10 @@ impl HomeAssistantClient {
     async fn sync_all_entities(&self) -> Result<(), String> {
         let states = self.get_states().await?;
         self.entity_manager.sync_entities(states).await?;
-        log::info!("✓ Synced {} entities", self.entity_manager.get_entity_count().await);
+        log::info!(
+            "✓ Synced {} entities",
+            self.entity_manager.get_entity_count().await
+        );
         Ok(())
     }
 

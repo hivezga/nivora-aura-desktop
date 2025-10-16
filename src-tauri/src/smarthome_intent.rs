@@ -2,7 +2,6 @@
 ///
 /// Parses natural language commands into structured intents for Home Assistant control.
 /// Extracts key information: action, room, device type, device name, and parameters.
-
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -76,9 +75,7 @@ pub enum SmartHomeIntent {
     },
 
     /// Activate a scene
-    ActivateScene {
-        scene_name: String,
-    },
+    ActivateScene { scene_name: String },
 
     /// Request setup guide/onboarding help
     SetupGuide,
@@ -103,7 +100,8 @@ impl SmartHomeIntentParser {
         let text_lower = text.to_lowercase();
 
         // Setup guide / onboarding (check first as it's very specific)
-        if text_lower.contains("help") && (text_lower.contains("set up") || text_lower.contains("setup"))
+        if text_lower.contains("help")
+            && (text_lower.contains("set up") || text_lower.contains("setup"))
             || text_lower.contains("guide me through")
             || text_lower.contains("how do i add")
             || text_lower.contains("onboarding")
@@ -176,7 +174,8 @@ impl SmartHomeIntentParser {
         if Self::is_question(&text_lower) {
             let room = Self::extract_room(&text_lower);
             let device_type = Self::extract_device_type(&text_lower);
-            let device_name = device_type.as_ref()
+            let device_name = device_type
+                .as_ref()
                 .and_then(|dtype| Self::extract_device_name(&text_lower, dtype));
 
             return SmartHomeIntent::GetState {
@@ -191,7 +190,8 @@ impl SmartHomeIntentParser {
 
         let room = Self::extract_room(&text_lower);
         let device_type = Self::extract_device_type(&text_lower);
-        let device_name = device_type.as_ref()
+        let device_name = device_type
+            .as_ref()
             .and_then(|dtype| Self::extract_device_name(&text_lower, dtype));
 
         match action {
@@ -222,7 +222,10 @@ impl SmartHomeIntentParser {
     fn extract_action(text: &str) -> Action {
         if text.contains("turn on") || text.contains("switch on") || text.contains("enable") {
             Action::TurnOn
-        } else if text.contains("turn off") || text.contains("switch off") || text.contains("disable") {
+        } else if text.contains("turn off")
+            || text.contains("switch off")
+            || text.contains("disable")
+        {
             Action::TurnOff
         } else if text.contains("toggle") {
             Action::Toggle
@@ -300,9 +303,8 @@ impl SmartHomeIntentParser {
         // Look for common device name patterns
         static DEVICE_NAME_PATTERNS: Lazy<Vec<&str>> = Lazy::new(|| {
             vec![
-                "ceiling", "table", "desk", "floor", "bedside",
-                "main", "overhead", "reading", "accent",
-                "front", "back", "side", "left", "right",
+                "ceiling", "table", "desk", "floor", "bedside", "main", "overhead", "reading",
+                "accent", "front", "back", "side", "left", "right",
             ]
         });
 
@@ -322,9 +324,8 @@ impl SmartHomeIntentParser {
             Regex::new(r"(?:brightness|dim|bright).*?(\d+)\s*(?:%|percent)?").unwrap()
         });
 
-        static SET_TO_RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?:set to|to)\s+(\d+)\s*(?:%|percent)?").unwrap()
-        });
+        static SET_TO_RE: Lazy<Regex> =
+            Lazy::new(|| Regex::new(r"(?:set to|to)\s+(\d+)\s*(?:%|percent)?").unwrap());
 
         // Try brightness-specific patterns first
         if let Some(caps) = BRIGHTNESS_RE.captures(text) {
@@ -379,7 +380,10 @@ impl SmartHomeIntentParser {
     /// Extract scene name
     fn extract_scene(text: &str) -> Option<String> {
         static SCENE_RE: Lazy<Regex> = Lazy::new(|| {
-            Regex::new(r"(?:activate|turn on|enable|set)\s+(?:the\s+)?(\w+(?:\s+\w+)?)\s+(?:scene|mode)").unwrap()
+            Regex::new(
+                r"(?:activate|turn on|enable|set)\s+(?:the\s+)?(\w+(?:\s+\w+)?)\s+(?:scene|mode)",
+            )
+            .unwrap()
         });
 
         if let Some(caps) = SCENE_RE.captures(text) {
@@ -661,9 +665,18 @@ mod tests {
 
     #[test]
     fn test_brightness_extraction() {
-        assert_eq!(SmartHomeIntentParser::extract_brightness("brightness 50%"), Some(50));
-        assert_eq!(SmartHomeIntentParser::extract_brightness("set to 80 percent"), Some(80));
-        assert_eq!(SmartHomeIntentParser::extract_brightness("dim to 25"), Some(25));
+        assert_eq!(
+            SmartHomeIntentParser::extract_brightness("brightness 50%"),
+            Some(50)
+        );
+        assert_eq!(
+            SmartHomeIntentParser::extract_brightness("set to 80 percent"),
+            Some(80)
+        );
+        assert_eq!(
+            SmartHomeIntentParser::extract_brightness("dim to 25"),
+            Some(25)
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -191,7 +191,7 @@ const DevicesView: React.FC = () => {
     if (haStatus) {
       const url = `${haStatus.base_url}/config/integrations/add?domain=${domain}`;
       try {
-        await open(url);
+        await openUrl(url);
       } catch (error) {
         showErrorToast(error, "Failed to open integration page");
       }

@@ -3,7 +3,6 @@
 /// This module provides a centralized error type that encompasses all possible
 /// errors that can occur in the application. Using `thiserror`, we derive the
 /// Error trait and provide clean, descriptive error messages.
-
 use thiserror::Error;
 
 /// Main error type for all Aura operations
@@ -40,6 +39,10 @@ pub enum AuraError {
     /// Home Assistant integration errors (WebSocket, REST API, authentication)
     #[error("Home Assistant error: {0}")]
     HomeAssistant(String),
+
+    /// Voice biometrics errors (enrollment, identification, model operations)
+    #[error("Voice biometrics error: {0}")]
+    VoiceBiometrics(String),
 
     /// File I/O errors (model loading, directory access)
     #[error("File I/O error: {0}")]

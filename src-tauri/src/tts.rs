@@ -38,7 +38,11 @@ impl TextToSpeech {
     /// - Model file doesn't exist
     /// - Model config (.json) doesn't exist
     /// - eSpeak-NG data directory doesn't exist
-    pub fn new(piper_path: PathBuf, model_path: PathBuf, espeak_data_path: PathBuf) -> Result<Self, String> {
+    pub fn new(
+        piper_path: PathBuf,
+        model_path: PathBuf,
+        espeak_data_path: PathBuf,
+    ) -> Result<Self, String> {
         log::info!("Initializing subprocess-based Piper TTS engine...");
         log::info!("  Piper binary: {:?}", piper_path);
         log::info!("  Voice model: {:?}", model_path);
@@ -127,14 +131,16 @@ impl TextToSpeech {
         log::debug!("Spawning piper subprocess...");
 
         // Get directory containing piper binary for LD_LIBRARY_PATH
-        let piper_dir = self.piper_path.parent()
+        let piper_dir = self
+            .piper_path
+            .parent()
             .ok_or("Failed to get piper binary directory")?;
 
         // Set LD_LIBRARY_PATH to include the piper bin directory (contains .so files)
         let mut cmd = Command::new(&self.piper_path);
         cmd.arg("--model")
             .arg(&self.model_path)
-            .arg("--output-raw")  // Output raw PCM instead of WAV
+            .arg("--output-raw") // Output raw PCM instead of WAV
             .arg("--espeak_data")
             .arg(&self.espeak_data_path)
             .env("LD_LIBRARY_PATH", piper_dir) // Add library path for bundled .so files
@@ -142,7 +148,8 @@ impl TextToSpeech {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| format!("Failed to spawn piper process: {}", e))?;
 
         // Write text to stdin
@@ -164,7 +171,10 @@ impl TextToSpeech {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            log::error!("Piper process failed with exit code: {:?}", output.status.code());
+            log::error!(
+                "Piper process failed with exit code: {:?}",
+                output.status.code()
+            );
             log::error!("Piper stderr: {}", stderr);
             return Err(format!("Piper process failed: {}", stderr));
         }

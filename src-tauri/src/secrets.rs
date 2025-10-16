@@ -112,9 +112,7 @@ pub fn load_spotify_access_token() -> Result<String, String> {
             log::debug!("Spotify access token loaded successfully");
             Ok(token)
         }
-        Err(keyring::Error::NoEntry) => {
-            Err("No Spotify access token found".to_string())
-        }
+        Err(keyring::Error::NoEntry) => Err("No Spotify access token found".to_string()),
         Err(e) => {
             log::warn!("Failed to load Spotify access token: {}", e);
             Err(format!("Failed to load Spotify access token: {}", e))
@@ -149,9 +147,7 @@ pub fn load_spotify_refresh_token() -> Result<String, String> {
             log::debug!("Spotify refresh token loaded successfully");
             Ok(token)
         }
-        Err(keyring::Error::NoEntry) => {
-            Err("No Spotify refresh token found".to_string())
-        }
+        Err(keyring::Error::NoEntry) => Err("No Spotify refresh token found".to_string()),
         Err(e) => {
             log::warn!("Failed to load Spotify refresh token: {}", e);
             Err(format!("Failed to load Spotify refresh token: {}", e))
@@ -184,14 +180,10 @@ pub fn load_spotify_token_expiry() -> Result<chrono::DateTime<chrono::Utc>, Stri
         .map_err(|e| format!("Failed to create keyring entry: {}", e))?;
 
     match entry.get_password() {
-        Ok(expiry_str) => {
-            chrono::DateTime::parse_from_rfc3339(&expiry_str)
-                .map(|dt| dt.with_timezone(&chrono::Utc))
-                .map_err(|e| format!("Failed to parse Spotify token expiry: {}", e))
-        }
-        Err(keyring::Error::NoEntry) => {
-            Err("No Spotify token expiry found".to_string())
-        }
+        Ok(expiry_str) => chrono::DateTime::parse_from_rfc3339(&expiry_str)
+            .map(|dt| dt.with_timezone(&chrono::Utc))
+            .map_err(|e| format!("Failed to parse Spotify token expiry: {}", e)),
+        Err(keyring::Error::NoEntry) => Err("No Spotify token expiry found".to_string()),
         Err(e) => {
             log::warn!("Failed to load Spotify token expiry: {}", e);
             Err(format!("Failed to load Spotify token expiry: {}", e))
@@ -207,8 +199,8 @@ pub fn delete_spotify_tokens() -> Result<(), String> {
     let mut errors = Vec::new();
 
     // Delete access token
-    if let Err(e) = Entry::new(SERVICE_NAME, SPOTIFY_ACCESS_TOKEN)
-        .and_then(|entry| entry.delete_credential())
+    if let Err(e) =
+        Entry::new(SERVICE_NAME, SPOTIFY_ACCESS_TOKEN).and_then(|entry| entry.delete_credential())
     {
         if !matches!(e, keyring::Error::NoEntry) {
             errors.push(format!("access token: {}", e));
@@ -216,8 +208,8 @@ pub fn delete_spotify_tokens() -> Result<(), String> {
     }
 
     // Delete refresh token
-    if let Err(e) = Entry::new(SERVICE_NAME, SPOTIFY_REFRESH_TOKEN)
-        .and_then(|entry| entry.delete_credential())
+    if let Err(e) =
+        Entry::new(SERVICE_NAME, SPOTIFY_REFRESH_TOKEN).and_then(|entry| entry.delete_credential())
     {
         if !matches!(e, keyring::Error::NoEntry) {
             errors.push(format!("refresh token: {}", e));
@@ -225,8 +217,8 @@ pub fn delete_spotify_tokens() -> Result<(), String> {
     }
 
     // Delete token expiry
-    if let Err(e) = Entry::new(SERVICE_NAME, SPOTIFY_TOKEN_EXPIRY)
-        .and_then(|entry| entry.delete_credential())
+    if let Err(e) =
+        Entry::new(SERVICE_NAME, SPOTIFY_TOKEN_EXPIRY).and_then(|entry| entry.delete_credential())
     {
         if !matches!(e, keyring::Error::NoEntry) {
             errors.push(format!("token expiry: {}", e));
@@ -237,7 +229,10 @@ pub fn delete_spotify_tokens() -> Result<(), String> {
         log::info!("All Spotify tokens deleted successfully");
         Ok(())
     } else {
-        Err(format!("Failed to delete some tokens: {}", errors.join(", ")))
+        Err(format!(
+            "Failed to delete some tokens: {}",
+            errors.join(", ")
+        ))
     }
 }
 
@@ -280,9 +275,7 @@ pub fn load_ha_access_token() -> Result<String, String> {
             log::debug!("Home Assistant access token loaded successfully");
             Ok(token)
         }
-        Err(keyring::Error::NoEntry) => {
-            Err("No Home Assistant access token found".to_string())
-        }
+        Err(keyring::Error::NoEntry) => Err("No Home Assistant access token found".to_string()),
         Err(e) => {
             log::warn!("Failed to load Home Assistant access token: {}", e);
             Err(format!("Failed to load Home Assistant access token: {}", e))
@@ -306,7 +299,10 @@ pub fn delete_ha_access_token() -> Result<(), String> {
             log::info!("No Home Assistant access token to delete");
             Ok(())
         }
-        Err(e) => Err(format!("Failed to delete Home Assistant access token: {}", e)),
+        Err(e) => Err(format!(
+            "Failed to delete Home Assistant access token: {}",
+            e
+        )),
     }
 }
 

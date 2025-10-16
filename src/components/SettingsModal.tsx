@@ -23,6 +23,7 @@ import {
 import { showErrorToast } from "../utils/errorHandler";
 import SpotifySettings from "./SpotifySettings";
 import HomeAssistantSettings from "./HomeAssistantSettings";
+import UserProfilesSettings from "./UserProfilesSettings";
 
 const SettingsModal: React.FC = () => {
   const isOpen = useChatStore((state) => state.isSettingsOpen);
@@ -491,6 +492,18 @@ const SettingsModal: React.FC = () => {
           </div>
 
           <HomeAssistantSettings />
+        </div>
+
+        {/* User Profiles (Voice Biometrics) */}
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-200 mb-3">User Profiles</h3>
+            <p className="text-xs text-gray-500 mb-4">
+              Manage voice biometric profiles for personalized responses and user identification.
+            </p>
+          </div>
+
+          <UserProfilesSettings />
         </div>
 
         <DialogFooter className="gap-2">

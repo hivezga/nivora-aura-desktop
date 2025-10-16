@@ -5,13 +5,13 @@
 //
 // PKCE is mandatory for native/desktop applications as of April 2025 per Spotify's security requirements.
 
+use base64::{engine::general_purpose, Engine as _};
+use chrono::{DateTime, Utc};
+use rand::Rng;
+use sha2::{Digest, Sha256};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use rand::Rng;
-use sha2::{Sha256, Digest};
-use base64::{engine::general_purpose, Engine as _};
-use tiny_http::{Server, Response};
-use chrono::{Utc, DateTime};
+use tiny_http::{Response, Server};
 
 /// OAuth2 authorization endpoint
 const SPOTIFY_AUTH_URL: &str = "https://accounts.spotify.com/authorize";
@@ -63,7 +63,7 @@ pub enum SpotifyAuthError {
 pub struct TokenResponse {
     pub access_token: String,
     pub token_type: String,
-    pub expires_in: u64,         // Seconds until expiry
+    pub expires_in: u64, // Seconds until expiry
     pub refresh_token: Option<String>,
     pub scope: String,
 }
@@ -103,8 +103,8 @@ impl SpotifyAuth {
         log::debug!("Generated PKCE verifier and challenge");
 
         // 2. Start local HTTP server for OAuth callback
-        let (server, callback_receiver) = start_callback_server()
-            .map_err(|e| SpotifyAuthError::ServerError(e))?;
+        let (server, callback_receiver) =
+            start_callback_server().map_err(|e| SpotifyAuthError::ServerError(e))?;
 
         log::info!("Started local HTTP server on http://127.0.0.1:8888");
 
@@ -117,24 +117,26 @@ impl SpotifyAuth {
         // 4. Open system browser
         if let Err(e) = open::that(&auth_url) {
             log::error!("Failed to open browser: {}", e);
-            return Err(SpotifyAuthError::AuthFailed(
-                format!("Failed to open browser: {}", e)
-            ));
+            return Err(SpotifyAuthError::AuthFailed(format!(
+                "Failed to open browser: {}",
+                e
+            )));
         }
 
         // 5. Wait for OAuth callback (with 120 second timeout)
         log::info!("Waiting for user authorization (timeout: 120s)...");
 
-        let auth_code = wait_for_callback(server, callback_receiver, 120)
-            .map_err(|e| {
-                log::error!("OAuth callback failed: {}", e);
-                SpotifyAuthError::CallbackTimeout
-            })?;
+        let auth_code = wait_for_callback(server, callback_receiver, 120).map_err(|e| {
+            log::error!("OAuth callback failed: {}", e);
+            SpotifyAuthError::CallbackTimeout
+        })?;
 
         log::info!("Received authorization code from Spotify");
 
         // 6. Exchange authorization code for tokens
-        let token_response = self.exchange_code_for_token(&auth_code, &pkce_verifier).await?;
+        let token_response = self
+            .exchange_code_for_token(&auth_code, &pkce_verifier)
+            .await?;
 
         log::info!("✓ Spotify authorization successful!");
 
@@ -154,7 +156,8 @@ impl SpotifyAuth {
             ("client_id", &self.client_id),
         ];
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(SPOTIFY_TOKEN_URL)
             .form(&params)
             .send()
@@ -207,7 +210,8 @@ impl SpotifyAuth {
             ("code_verifier", pkce_verifier),
         ];
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(SPOTIFY_TOKEN_URL)
             .form(&params)
             .send()
@@ -302,8 +306,14 @@ fn wait_for_callback(
             for param in query.split('&') {
                 if let Some((key, value)) = param.split_once('=') {
                     match key {
-                        "code" => auth_code = Some(urlencoding::decode(value).unwrap_or_default().to_string()),
-                        "error" => error_code = Some(urlencoding::decode(value).unwrap_or_default().to_string()),
+                        "code" => {
+                            auth_code =
+                                Some(urlencoding::decode(value).unwrap_or_default().to_string())
+                        }
+                        "error" => {
+                            error_code =
+                                Some(urlencoding::decode(value).unwrap_or_default().to_string())
+                        }
                         _ => {}
                     }
                 }
@@ -391,7 +401,10 @@ fn wait_for_callback(
                 *callback_code.lock().unwrap() = Some(code.clone());
                 return Ok(code);
             } else {
-                return Err(format!("Authorization failed: {}", error_code.unwrap_or_else(|| "unknown error".to_string())));
+                return Err(format!(
+                    "Authorization failed: {}",
+                    error_code.unwrap_or_else(|| "unknown error".to_string())
+                ));
             }
         }
     }

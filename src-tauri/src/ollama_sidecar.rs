@@ -95,9 +95,7 @@ fn detect_nvidia_gpu() -> Option<String> {
 
     if let Ok(output) = output {
         if output.status.success() {
-            let gpu_name = String::from_utf8_lossy(&output.stdout)
-                .trim()
-                .to_string();
+            let gpu_name = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !gpu_name.is_empty() {
                 return Some(gpu_name);
             }
@@ -108,8 +106,9 @@ fn detect_nvidia_gpu() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         // Check if CUDA libraries exist (indicates NVIDIA GPU support)
-        if std::path::Path::new("lib/ollama/cuda_v12/ggml-cuda.dll").exists() ||
-           std::path::Path::new("lib/ollama/cuda_v13/ggml-cuda.dll").exists() {
+        if std::path::Path::new("lib/ollama/cuda_v12/ggml-cuda.dll").exists()
+            || std::path::Path::new("lib/ollama/cuda_v13/ggml-cuda.dll").exists()
+        {
             log::debug!("CUDA libraries found in bundle, assuming NVIDIA GPU");
             return Some("NVIDIA GPU (detected via drivers)".to_string());
         }
@@ -118,8 +117,9 @@ fn detect_nvidia_gpu() -> Option<String> {
     // Linux: Check for CUDA runtime
     #[cfg(target_os = "linux")]
     {
-        if std::path::Path::new("/usr/local/cuda").exists() ||
-           std::path::Path::new("/usr/lib/cuda").exists() {
+        if std::path::Path::new("/usr/local/cuda").exists()
+            || std::path::Path::new("/usr/lib/cuda").exists()
+        {
             log::debug!("CUDA installation found, assuming NVIDIA GPU");
             return Some("NVIDIA GPU (detected via CUDA)".to_string());
         }
@@ -135,9 +135,7 @@ fn detect_amd_gpu() -> Option<String> {
     #[cfg(target_os = "windows")]
     {
         // Try AMD's rocm-smi equivalent on Windows
-        let output = Command::new("rocm-smi")
-            .arg("--showproductname")
-            .output();
+        let output = Command::new("rocm-smi").arg("--showproductname").output();
 
         if let Ok(output) = output {
             if output.status.success() {
@@ -161,9 +159,7 @@ fn detect_amd_gpu() -> Option<String> {
     // Linux: Check for ROCm installation
     #[cfg(target_os = "linux")]
     {
-        let output = Command::new("rocm-smi")
-            .arg("--showproductname")
-            .output();
+        let output = Command::new("rocm-smi").arg("--showproductname").output();
 
         if let Ok(output) = output {
             if output.status.success() {
@@ -215,10 +211,7 @@ impl OllamaSidecar {
 
         // Verify binary exists
         if !binary_path.exists() {
-            return Err(format!(
-                "Ollama binary not found at: {:?}",
-                binary_path
-            ));
+            return Err(format!("Ollama binary not found at: {:?}", binary_path));
         }
 
         // Create models directory if it doesn't exist
@@ -264,9 +257,15 @@ impl OllamaSidecar {
         }
 
         log::info!("Starting Ollama sidecar process...");
-        log::info!("  Acceleration: {} ({})",
-                   self.gpu_info.backend,
-                   if self.gpu_info.available { "enabled" } else { "CPU fallback" });
+        log::info!(
+            "  Acceleration: {} ({})",
+            self.gpu_info.backend,
+            if self.gpu_info.available {
+                "enabled"
+            } else {
+                "CPU fallback"
+            }
+        );
 
         // Spawn Ollama server process
         // Note: Ollama automatically detects and uses available GPU acceleration
@@ -324,7 +323,10 @@ impl OllamaSidecar {
             // Try to connect to the API
             match client.get(&api_url).send().await {
                 Ok(response) if response.status().is_success() => {
-                    log::info!("✓ Ollama server is ready! (took {:.1}s)", start.elapsed().as_secs_f32());
+                    log::info!(
+                        "✓ Ollama server is ready! (took {:.1}s)",
+                        start.elapsed().as_secs_f32()
+                    );
                     return Ok(());
                 }
                 Ok(response) => {
