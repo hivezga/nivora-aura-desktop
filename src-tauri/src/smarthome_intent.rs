@@ -75,9 +75,11 @@ pub enum SmartHomeIntent {
         device_name: Option<String>,
     },
 
-    /// Activate a scene
+    /// Activate a scene (or personal shortcut)
     ActivateScene {
         scene_name: String,
+        /// User ID if this is a personal shortcut ("my morning routine")
+        user_id: Option<i64>,
     },
 
     /// Request setup guide/onboarding help
@@ -99,7 +101,13 @@ pub struct SmartHomeIntentParser;
 
 impl SmartHomeIntentParser {
     /// Parse a natural language command into a SmartHomeIntent
+    /// Optional user_id parameter enables resolution of personal shortcuts
     pub fn parse(text: &str) -> SmartHomeIntent {
+        Self::parse_with_user(text, None)
+    }
+
+    /// Parse with optional user context for personal shortcuts
+    pub fn parse_with_user(text: &str, user_id: Option<i64>) -> SmartHomeIntent {
         let text_lower = text.to_lowercase();
 
         // Setup guide / onboarding (check first as it's very specific)
@@ -112,9 +120,20 @@ impl SmartHomeIntentParser {
             return SmartHomeIntent::SetupGuide;
         }
 
-        // Activate scene (check first as it's specific)
+        // Check for personal shortcuts FIRST (e.g., "my morning routine", "activate my focus mode")
+        if let Some((shortcut_name, _is_personal)) = Self::extract_personal_shortcut(&text_lower) {
+            return SmartHomeIntent::ActivateScene {
+                scene_name: shortcut_name,
+                user_id,
+            };
+        }
+
+        // Activate scene (global scene, no user context)
         if let Some(scene_name) = Self::extract_scene(&text_lower) {
-            return SmartHomeIntent::ActivateScene { scene_name };
+            return SmartHomeIntent::ActivateScene {
+                scene_name,
+                user_id: None,
+            };
         }
 
         // Set brightness
@@ -376,6 +395,38 @@ impl SmartHomeIntentParser {
         None
     }
 
+    /// Extract personal shortcut (with possessive pronouns)
+    /// Returns (shortcut_name, is_personal)
+    fn extract_personal_shortcut(text: &str) -> Option<(String, bool)> {
+        // Pattern 1: "my <shortcut>" or "my <shortcut> scene/mode/routine"
+        static PERSONAL_RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(?:activate|turn on|enable|set|run)\s+(?:my|mine)\s+([a-z\s]+?)(?:\s+(?:scene|mode|routine|script))?(?:\s|$)").unwrap()
+        });
+
+        // Pattern 2: "activate my <shortcut>"
+        static PERSONAL_SHORTCUT_RE: Lazy<Regex> = Lazy::new(|| {
+            Regex::new(r"(?:my|mine)\s+([a-z\s]+?)(?:\s+(?:scene|mode|routine|script))?(?:\s|$)").unwrap()
+        });
+
+        // Try personal shortcut patterns first
+        if let Some(caps) = PERSONAL_RE.captures(text) {
+            if let Some(shortcut_match) = caps.get(1) {
+                let shortcut_name = shortcut_match.as_str().trim();
+                return Some((shortcut_name.to_string(), true));
+            }
+        }
+
+        // Try looser pattern
+        if let Some(caps) = PERSONAL_SHORTCUT_RE.captures(text) {
+            if let Some(shortcut_match) = caps.get(1) {
+                let shortcut_name = shortcut_match.as_str().trim();
+                return Some((shortcut_name.to_string(), true));
+            }
+        }
+
+        None
+    }
+
     /// Extract scene name
     fn extract_scene(text: &str) -> Option<String> {
         static SCENE_RE: Lazy<Regex> = Lazy::new(|| {
@@ -514,6 +565,43 @@ mod tests {
             intent,
             SmartHomeIntent::ActivateScene {
                 scene_name: "Movie Mode".to_string(),
+                user_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_personal_shortcut_my() {
+        let intent = SmartHomeIntentParser::parse_with_user("activate my morning routine", Some(1));
+        assert_eq!(
+            intent,
+            SmartHomeIntent::ActivateScene {
+                scene_name: "morning routine".to_string(),
+                user_id: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn test_personal_shortcut_my_scene() {
+        let intent = SmartHomeIntentParser::parse_with_user("turn on my focus mode", Some(2));
+        assert_eq!(
+            intent,
+            SmartHomeIntent::ActivateScene {
+                scene_name: "focus mode".to_string(),
+                user_id: Some(2),
+            }
+        );
+    }
+
+    #[test]
+    fn test_personal_shortcut_without_user() {
+        let intent = SmartHomeIntentParser::parse("run my bedtime routine");
+        assert_eq!(
+            intent,
+            SmartHomeIntent::ActivateScene {
+                scene_name: "bedtime routine".to_string(),
+                user_id: None,
             }
         );
     }

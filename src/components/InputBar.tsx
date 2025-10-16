@@ -4,6 +4,19 @@ import { useChatStore } from "../store";
 import { Mic } from "lucide-react";
 import { showErrorToast } from "../utils/errorHandler";
 
+// Transcription result structure from backend
+interface TranscriptionResult {
+  text: string;
+  duration_seconds: number;
+  sample_count: number;
+  speaker_info: {
+    user_id: number | null;
+    user_name: string | null;
+    similarity_score: number;
+    identified: boolean;
+  } | null;
+}
+
 const InputBar: React.FC = () => {
   const [input, setInput] = useState("");
   const addMessage = useChatStore((state) => state.addMessage);
@@ -15,6 +28,28 @@ const InputBar: React.FC = () => {
   const updateConversationTitle = useChatStore((state) => state.updateConversationTitle);
   const conversations = useChatStore((state) => state.conversations);
   const setLastInputMethod = useChatStore((state) => state.setLastInputMethod);
+  const setCurrentUser = useChatStore((state) => state.setCurrentUser);
+  const currentUserId = useChatStore((state) => state.currentUserId);
+
+  // Detect if a command is a music command
+  const isMusicCommand = (text: string): boolean => {
+    const lowerText = text.toLowerCase();
+    const musicKeywords = ['play', 'pause', 'resume', 'stop', 'next', 'previous', 'skip', 'what\'s playing', 'whats playing'];
+    return musicKeywords.some(keyword => lowerText.includes(keyword));
+  };
+
+  // Handle music command routing
+  const handleMusicCommand = async (text: string, userId: number | null): Promise<string> => {
+    try {
+      const response = await invoke<string>("spotify_handle_music_command", {
+        command: text,
+        user_id: userId,  // AC1: Fixed - Rust expects snake_case parameter name
+      });
+      return response;
+    } catch (error) {
+      throw error;
+    }
+  };
 
   const handleSend = async () => {
     if (!input.trim()) return;
@@ -64,10 +99,22 @@ const InputBar: React.FC = () => {
       // Set status to processing (enables "Stop Generating" button)
       setAppStatus("processing");
 
-      // Call backend command to get response
-      const response = await invoke<string>("handle_user_prompt", {
-        prompt: userPrompt,
-      });
+      // **AC1: Route music commands to Spotify with user context (text input)**
+      let response: string;
+      if (isMusicCommand(userPrompt)) {
+        console.log("Music command detected (text input), routing to Spotify...");
+        try {
+          response = await handleMusicCommand(userPrompt, currentUserId);
+        } catch (musicError) {
+          // If music command fails, show error message
+          response = `Sorry, there was an error with your music command: ${musicError}`;
+        }
+      } else {
+        // Call backend command to get response for non-music commands
+        response = await invoke<string>("handle_user_prompt", {
+          prompt: userPrompt,
+        });
+      }
 
       // Set status back to idle
       setAppStatus("idle");
@@ -171,9 +218,9 @@ const InputBar: React.FC = () => {
       setAppStatus("listening");
 
       // Call STT service to record and transcribe
-      let transcribedText: string;
+      let transcriptionResult: TranscriptionResult;
       try {
-        transcribedText = await invoke<string>("listen_and_transcribe");
+        transcriptionResult = await invoke<TranscriptionResult>("listen_and_transcribe");
       } catch (error) {
         // Check if this was a user cancellation
         const errorMessage = String(error);
@@ -189,9 +236,22 @@ const InputBar: React.FC = () => {
       // Set status back to idle after transcription
       setAppStatus("idle");
 
+      const transcribedText = transcriptionResult.text;
+
       if (!transcribedText.trim()) {
         console.log("No speech detected");
         return;
+      }
+
+      // **AC1: Update current user context from speaker identification**
+      if (transcriptionResult.speaker_info && transcriptionResult.speaker_info.identified) {
+        const userId = transcriptionResult.speaker_info.user_id;
+        const userName = transcriptionResult.speaker_info.user_name;
+        setCurrentUser(userId, userName);
+        console.log(`✅ Speaker identified: ${userName} (ID: ${userId})`);
+      } else {
+        setCurrentUser(null, null);
+        console.log("No speaker identified");
       }
 
       console.log("Transcribed:", transcribedText);
@@ -228,10 +288,22 @@ const InputBar: React.FC = () => {
       // Set status to processing
       setAppStatus("processing");
 
-      // Get LLM response
-      const response = await invoke<string>("handle_user_prompt", {
-        prompt: transcribedText,
-      });
+      // **AC1: Route music commands to Spotify with user context**
+      let response: string;
+      if (isMusicCommand(transcribedText)) {
+        console.log("Music command detected, routing to Spotify...");
+        try {
+          response = await handleMusicCommand(transcribedText, transcriptionResult.speaker_info?.user_id || null);
+        } catch (musicError) {
+          // If music command fails, show error message
+          response = `Sorry, there was an error with your music command: ${musicError}`;
+        }
+      } else {
+        // Get LLM response for non-music commands
+        response = await invoke<string>("handle_user_prompt", {
+          prompt: transcribedText,
+        });
+      }
 
       // Save assistant response
       await invoke("save_message", {

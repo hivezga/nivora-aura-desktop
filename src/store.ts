@@ -64,6 +64,11 @@ interface ChatStore {
   lastInputMethod: InputMethod | null;
   setLastInputMethod: (method: InputMethod | null) => void;
 
+  // Current identified user (from voice biometrics)
+  currentUserId: number | null;
+  currentUserName: string | null;
+  setCurrentUser: (userId: number | null, userName: string | null) => void;
+
   // Settings management
   settings: Settings;
   setSettings: (settings: Settings) => void;
@@ -110,6 +115,11 @@ export const useChatStore = create<ChatStore>((set) => ({
   // Input method tracking
   lastInputMethod: null,
   setLastInputMethod: (method) => set({ lastInputMethod: method }),
+
+  // Current user tracking
+  currentUserId: null,
+  currentUserName: null,
+  setCurrentUser: (userId, userName) => set({ currentUserId: userId, currentUserName: userName }),
 
   // Settings state
   settings: {

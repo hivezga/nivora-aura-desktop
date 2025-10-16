@@ -11,7 +11,8 @@ use sherpa_rs::speaker_id::{EmbeddingExtractor, ExtractorConfig};
 use std::path::PathBuf;
 
 /// Standard embedding dimension for WeSpeaker ECAPA-TDNN model
-const EMBEDDING_DIM: usize = 192;
+/// Note: The wespeaker_en_voxceleb_CAM++.onnx model produces 512-dimensional embeddings
+const EMBEDDING_DIM: usize = 512;
 
 /// Similarity threshold for speaker recognition (cosine similarity)
 /// Values above this threshold indicate a match

@@ -18,8 +18,8 @@ use native_voice::{NativeVoicePipeline, TranscriptionResult, SpeakerInfo};
 use tts::TextToSpeech;
 use llm::LLMEngine;
 use ollama_sidecar::OllamaSidecar;
-use database::{Database, DatabaseState, Conversation, Message, Settings, get_database_path};
-use voice_biometrics::{VoiceBiometrics, UserProfile, BiometricsError};
+use database::{Database, DatabaseState, Conversation, Message, Settings, UserHAShortcut, UserHAPreferences, get_database_path};
+use voice_biometrics::{VoiceBiometrics, UserProfile};
 use error::AuraError;
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
@@ -132,7 +132,7 @@ async fn handle_user_prompt(
 async fn listen_and_transcribe(
     voice_pipeline: State<'_, Arc<StdMutex<NativeVoicePipeline>>>,
     voice_biometrics: State<'_, VoiceBiometricsState>,
-) -> Result<String, AuraError> {
+) -> Result<TranscriptionResult, AuraError> {
     log::info!("Tauri command: listen_and_transcribe called (Push-to-Talk)");
 
     // Use spawn_blocking because NativeVoicePipeline uses std::sync::Mutex internally
@@ -143,14 +143,20 @@ async fn listen_and_transcribe(
         let pipeline = voice_pipeline_clone.lock()
             .map_err(|e| AuraError::Internal(format!("Failed to lock voice pipeline: {}", e)))?;
 
-        // Extract and preserve audio samples BEFORE transcription (which clears the buffer)
-        let (samples, duration, avg_energy) = pipeline.extract_and_preserve_audio_samples();
+        // Perform transcription - now returns both text and audio samples
+        let (text, samples) = pipeline.start_transcription()
+            .map_err(|e| AuraError::VoicePipeline(e))?;
+
+        // Calculate audio metadata from the samples
+        let duration = samples.len() as f32 / 16000.0; // SAMPLE_RATE = 16000
+        let avg_energy = if !samples.is_empty() {
+            let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
+            (sum_squares / samples.len() as f32).sqrt()
+        } else {
+            0.0
+        };
         let metadata = (samples.len(), duration, avg_energy);
 
-        // Perform transcription
-        let text = pipeline.start_transcription()
-            .map_err(|e| AuraError::VoicePipeline(e))?;
-        
         Ok::<_, AuraError>((text, samples, metadata))
     }).await
     .map_err(|e| AuraError::Internal(format!("Task panicked: {}", e)))??;
@@ -217,14 +223,14 @@ async fn listen_and_transcribe(
 
     // Log the complete result for validation
     log::info!("Enhanced transcription result: text=\"{}\", duration={:.2}s, samples={}, speaker={:?}",
-               enhanced_result.text, 
+               enhanced_result.text,
                enhanced_result.duration_seconds,
                enhanced_result.sample_count,
                enhanced_result.speaker_info);
 
-    // For now, return just the transcription text for compatibility
-    // In a future version, this could return the full TranscriptionResult as JSON
-    Ok(transcription_text)
+    // **AC1: Multi-User Frontend Integration** - Return full result with speaker context
+    // This enables the frontend to route music commands with user_id for personalization
+    Ok(enhanced_result)
 }
 
 #[tauri::command]
@@ -1126,23 +1132,22 @@ async fn spotify_save_client_id(
     Ok(())
 }
 
-/// Handle music command with intent recognition and Spotify playback
+/// Handle music command with intent recognition and Spotify playback (Multi-User Aware)
 ///
 /// This is the main entry point for voice/text music commands. It parses the
 /// user's intent, searches Spotify, and controls playback accordingly.
+///
+/// **Multi-User Support (AC1):**
+/// - When `user_id` is provided (speaker identified), uses per-user Spotify tokens
+/// - When `user_id` is None (unknown speaker), falls back to global Spotify account
+/// - Provides appropriate error messages for each scenario (AC3)
 #[tauri::command]
 async fn spotify_handle_music_command(
     command: String,
+    user_id: Option<i64>, // NEW: User context from voice biometrics
     db: State<'_, DatabaseState>,
 ) -> Result<String, AuraError> {
-    log::info!("Handling music command: '{}'", command);
-
-    // Check if Spotify is connected
-    if !secrets::is_spotify_connected() {
-        return Err(AuraError::Spotify(
-            "Spotify is not connected. Please connect your Spotify account in Settings.".to_string()
-        ));
-    }
+    log::info!("Handling music command: '{}' (user_id: {:?})", command, user_id);
 
     // Get client ID from database
     let database = db.lock().await;
@@ -1158,17 +1163,51 @@ async fn spotify_handle_music_command(
         ));
     }
 
+    // **AC3: Graceful Fallback Logic**
+    // Determine which Spotify account to use based on speaker identification
+    let (client, user_context) = if let Some(uid) = user_id {
+        // User identified - check if they have Spotify connected
+        if secrets::is_user_spotify_connected(uid) {
+            log::info!("✓ Using user {}'s Spotify account", uid);
+            let client = SpotifyClient::new_for_user(client_id, uid)
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+            (client, format!("user {}", uid))
+        } else {
+            // User identified but not connected to Spotify
+            log::warn!("User {} identified but not connected to Spotify", uid);
+            return Err(AuraError::Spotify(format!(
+                "You haven't connected your Spotify account yet. Please go to Settings to link your Spotify account."
+            )));
+        }
+    } else {
+        // Unknown speaker - fall back to global Spotify account (legacy mode)
+        if secrets::is_spotify_connected() {
+            log::info!("⚠ Unknown speaker, using global Spotify account (legacy mode)");
+            let client = SpotifyClient::new(client_id)
+                .map_err(|e| AuraError::Spotify(e.to_string()))?;
+            (client, "global account".to_string())
+        } else {
+            // No Spotify account connected at all
+            return Err(AuraError::Spotify(
+                "Spotify is not connected. Please connect your Spotify account in Settings.".to_string()
+            ));
+        }
+    };
+
+    log::debug!("Spotify client created for: {}", user_context);
+
     // Parse music intent
     let intent = MusicIntentParser::parse(&command);
     log::info!("Parsed intent: {:?}", intent);
 
-    // Create Spotify client
-    let client = SpotifyClient::new(client_id)
-        .map_err(|e| AuraError::Spotify(e.to_string()))?;
-
     // Handle intent
     match intent {
-        MusicIntent::PlaySong { song, artist } => {
+        MusicIntent::PlaySong { song, artist, is_possessive } => {
+            // AC2: Log possessive context for future personalization
+            if is_possessive {
+                log::debug!("Possessive command detected - user-specific song search (future enhancement)");
+            }
+
             // Search for track
             let tracks = client.search_track(&song, artist.as_deref(), 10)
                 .await
@@ -1194,7 +1233,12 @@ async fn spotify_handle_music_command(
             Ok(message)
         }
 
-        MusicIntent::PlayPlaylist { playlist_name } => {
+        MusicIntent::PlayPlaylist { playlist_name, is_possessive } => {
+            // AC2: Possessive context indicates user-specific playlist
+            if is_possessive && user_id.is_some() {
+                log::info!("✓ User-specific playlist requested: '{}' for user {:?}", playlist_name, user_id);
+            }
+
             // Search user playlists
             let playlists = client.get_user_playlists(50)
                 .await
@@ -1217,7 +1261,12 @@ async fn spotify_handle_music_command(
             }
         }
 
-        MusicIntent::PlayArtist { artist } => {
+        MusicIntent::PlayArtist { artist, is_possessive } => {
+            // AC2: Log possessive context for future personalization
+            if is_possessive {
+                log::debug!("Possessive command detected - user-specific artist search (future enhancement)");
+            }
+
             // Search for artist's top tracks
             let tracks = client.search_track(&artist, Some(&artist), 10)
                 .await
@@ -1374,6 +1423,299 @@ async fn spotify_get_devices(db: State<'_, DatabaseState>) -> Result<serde_json:
     // Serialize to JSON for frontend
     serde_json::to_value(&devices)
         .map_err(|e| AuraError::Serialization(e))
+}
+
+// =============================================================================
+// Multi-User Spotify Commands (AC2 & AC3)
+// =============================================================================
+
+/// Response for user profile with Spotify status
+#[derive(Serialize)]
+struct UserProfileWithSpotify {
+    id: i64,
+    name: String,
+    enrollment_date: String,
+    last_recognized: Option<String>,
+    recognition_count: i64,
+    is_active: bool,
+    spotify_connected: bool,
+    spotify_display_name: Option<String>,
+    spotify_email: Option<String>,
+    spotify_connected_at: Option<String>,
+}
+
+/// List all user profiles with their Spotify connection status (AC2)
+#[tauri::command]
+async fn list_user_profiles_with_spotify(
+    voice_biometrics: State<'_, VoiceBiometricsState>,
+    db: State<'_, DatabaseState>,
+) -> Result<Vec<UserProfileWithSpotify>, AuraError> {
+    // Get all user profiles
+    let profiles = voice_biometrics.list_all_users().await
+        .map_err(|e| AuraError::Database(e.to_string()))?;
+
+    // Get database connection
+    let database = db.lock().await;
+
+    let mut result = Vec::new();
+    for profile in profiles {
+        // Check if user has Spotify connected
+        let spotify_connected = secrets::is_user_spotify_connected(profile.id);
+
+        // Query user_profiles table for Spotify metadata
+        let spotify_metadata = database.query_rows(
+            "SELECT spotify_display_name, spotify_email, spotify_connected_at
+             FROM user_profiles WHERE id = ?1 LIMIT 1",
+            &[&profile.id as &dyn rusqlite::ToSql],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            }
+        ).unwrap_or_default();
+
+        let (spotify_display_name, spotify_email, spotify_connected_at) =
+            spotify_metadata.first().cloned().unwrap_or((None, None, None));
+
+        result.push(UserProfileWithSpotify {
+            id: profile.id,
+            name: profile.name,
+            enrollment_date: profile.enrollment_date,
+            last_recognized: profile.last_recognized,
+            recognition_count: profile.recognition_count,
+            is_active: profile.is_active,
+            spotify_connected,
+            spotify_display_name,
+            spotify_email,
+            spotify_connected_at,
+        });
+    }
+
+    Ok(result)
+}
+
+/// Start Spotify OAuth for a specific user (AC2)
+#[tauri::command]
+async fn user_spotify_start_auth(
+    user_id: i64,
+    client_id: String,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!("Starting Spotify OAuth for user {}", user_id);
+
+    // Verify user exists
+    let database = db.lock().await;
+    let user_count = database.query_rows(
+        "SELECT COUNT(*) FROM user_profiles WHERE id = ?1",
+        &[&user_id as &dyn rusqlite::ToSql],
+        |row| row.get::<_, i64>(0)
+    ).unwrap_or_default();
+
+    let user_exists = user_count.first().copied().unwrap_or(0) > 0;
+
+    if !user_exists {
+        return Err(AuraError::Database(format!("User {} not found", user_id)));
+    }
+    drop(database);
+
+    // Use SpotifyAuth to start OAuth flow
+    use crate::spotify_auth::{SpotifyAuth, calculate_token_expiry};
+    let auth = SpotifyAuth::new(client_id.clone());
+
+    // Start auth flow and get tokens
+    let token_response = auth.start_authorization().await
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    let access_token = token_response.access_token;
+    let refresh_token = token_response.refresh_token
+        .ok_or_else(|| AuraError::Spotify("No refresh token received".to_string()))?;
+    let expires_at = calculate_token_expiry(token_response.expires_in);
+
+    // Save user-scoped tokens
+    secrets::save_user_spotify_access_token(user_id, &access_token)
+        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::save_user_spotify_refresh_token(user_id, &refresh_token)
+        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::save_user_spotify_token_expiry(user_id, &expires_at)
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Get user info from Spotify
+    let client = SpotifyClient::new_for_user(client_id, user_id)
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    let user_info = client.get_current_user().await
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    // Update database with Spotify metadata
+    let database = db.lock().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    database.execute_query(
+        "UPDATE user_profiles
+         SET spotify_connected = 1,
+             spotify_display_name = ?1,
+             spotify_email = ?2,
+             spotify_connected_at = ?3
+         WHERE id = ?4",
+        &[
+            &user_info.display_name as &dyn rusqlite::ToSql,
+            &user_info.email,
+            &now,
+            &user_id,
+        ],
+    ).map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ User {} connected to Spotify: {}", user_id, user_info.display_name);
+
+    Ok(())
+}
+
+/// Disconnect Spotify for a specific user (AC2)
+#[tauri::command]
+async fn user_spotify_disconnect(
+    user_id: i64,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!("Disconnecting Spotify for user {}", user_id);
+
+    // Delete user-scoped tokens from keyring
+    secrets::delete_user_spotify_tokens(user_id)
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Update database
+    let database = db.lock().await;
+    database.execute_query(
+        "UPDATE user_profiles
+         SET spotify_connected = 0,
+             spotify_display_name = '',
+             spotify_email = '',
+             spotify_user_id = '',
+             spotify_connected_at = NULL
+         WHERE id = ?1",
+        &[&user_id as &dyn rusqlite::ToSql],
+    ).map_err(|e| AuraError::Database(e))?;
+
+    log::info!("✓ User {} disconnected from Spotify", user_id);
+
+    Ok(())
+}
+
+/// Check if global Spotify tokens exist and can be migrated (AC3)
+#[derive(Serialize)]
+struct MigrationStatus {
+    global_tokens_exist: bool,
+    can_migrate: bool,
+    user_count: usize,
+}
+
+#[tauri::command]
+async fn check_global_spotify_migration(
+    voice_biometrics: State<'_, VoiceBiometricsState>,
+) -> Result<MigrationStatus, AuraError> {
+    let global_tokens_exist = secrets::is_spotify_connected();
+
+    let users = voice_biometrics.list_all_users().await
+        .map_err(|e| AuraError::Database(e.to_string()))?;
+
+    let user_count = users.len();
+    let can_migrate = global_tokens_exist && user_count > 0;
+
+    Ok(MigrationStatus {
+        global_tokens_exist,
+        can_migrate,
+        user_count,
+    })
+}
+
+/// Migrate global Spotify tokens to a specific user (AC3)
+#[tauri::command]
+async fn migrate_global_spotify_to_user(
+    user_id: i64,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!("Migrating global Spotify tokens to user {}", user_id);
+
+    // Verify user exists
+    let database = db.lock().await;
+    let user_count = database.query_rows(
+        "SELECT COUNT(*) FROM user_profiles WHERE id = ?1",
+        &[&user_id as &dyn rusqlite::ToSql],
+        |row| row.get::<_, i64>(0)
+    ).unwrap_or_default();
+
+    let user_exists = user_count.first().copied().unwrap_or(0) > 0;
+
+    if !user_exists {
+        return Err(AuraError::Database(format!("User {} not found", user_id)));
+    }
+
+    // Check if global tokens exist
+    if !secrets::is_spotify_connected() {
+        return Err(AuraError::Spotify("No global Spotify tokens to migrate".to_string()));
+    }
+
+    // Load global tokens
+    let access_token = secrets::load_spotify_access_token()
+        .map_err(|e| AuraError::Secrets(e))?;
+    let refresh_token = secrets::load_spotify_refresh_token()
+        .map_err(|e| AuraError::Secrets(e))?;
+    let token_expiry = secrets::load_spotify_token_expiry()
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Get Spotify client ID from database
+    let settings = database.load_settings()
+        .map_err(|e| AuraError::Database(e))?;
+    let client_id = settings.spotify_client_id;
+
+    if client_id.is_empty() {
+        return Err(AuraError::Spotify("No Spotify client ID configured".to_string()));
+    }
+
+    // Get user info from Spotify using global tokens
+    let client = SpotifyClient::new(client_id.clone())
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    let user_info = client.get_current_user().await
+        .map_err(|e| AuraError::Spotify(e.to_string()))?;
+
+    drop(database);  // Release lock before saving to keyring
+
+    // Save tokens to user-scoped keyring entries
+    secrets::save_user_spotify_access_token(user_id, &access_token)
+        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::save_user_spotify_refresh_token(user_id, &refresh_token)
+        .map_err(|e| AuraError::Secrets(e))?;
+    secrets::save_user_spotify_token_expiry(user_id, &token_expiry)
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    // Update database with Spotify metadata
+    let database = db.lock().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    database.execute_query(
+        "UPDATE user_profiles
+         SET spotify_connected = 1,
+             spotify_display_name = ?1,
+             spotify_email = ?2,
+             spotify_connected_at = ?3
+         WHERE id = ?4",
+        &[
+            &user_info.display_name as &dyn rusqlite::ToSql,
+            &user_info.email,
+            &now,
+            &user_id,
+        ],
+    ).map_err(|e| AuraError::Database(e))?;
+
+    drop(database);
+
+    // Delete global tokens (migration complete)
+    secrets::delete_spotify_tokens()
+        .map_err(|e| AuraError::Secrets(e))?;
+
+    log::info!("✓ Global Spotify tokens migrated to user {}", user_id);
+
+    Ok(())
 }
 
 // =============================================================================
@@ -1561,15 +1903,52 @@ async fn ha_call_service(
 #[tauri::command]
 async fn ha_handle_smart_home_command(
     command: String,
+    user_id: Option<i64>,
     ha_client_state: State<'_, HAClientState>,
     entity_manager: State<'_, EntityManagerState>,
+    db: State<'_, DatabaseState>,
 ) -> Result<String, AuraError> {
-    log::info!("Processing smart home command: {}", command);
+    log::info!("Processing smart home command: {} (user_id={:?})", command, user_id);
 
-    // Parse intent
-    let intent = SmartHomeIntentParser::parse(&command);
+    // Parse intent with user context for personal shortcuts
+    let intent = SmartHomeIntentParser::parse_with_user(&command, user_id);
 
     log::debug!("Parsed intent: {:?}", intent);
+
+    // Fetch user preferences for contextual defaults (AC3: Contextual Control)
+    let user_prefs = if let Some(uid) = user_id {
+        let database = db.lock().await;
+        match database.query_rows(
+            "SELECT user_id, default_room, default_light_entity, default_climate_entity, default_media_player_entity, updated_at FROM user_ha_preferences WHERE user_id = ?",
+            &[&uid],
+            |row| {
+                Ok(UserHAPreferences {
+                    user_id: row.get(0)?,
+                    default_room: row.get(1)?,
+                    default_light_entity: row.get(2)?,
+                    default_climate_entity: row.get(3)?,
+                    default_media_player_entity: row.get(4)?,
+                    updated_at: row.get(5)?,
+                })
+            }
+        ) {
+            Ok(mut results) => {
+                if !results.is_empty() {
+                    let prefs = results.remove(0);
+                    log::debug!("Loaded user preferences for user_id={}: default_room={:?}", uid, prefs.default_room);
+                    Some(prefs)
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to load user preferences: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Check if connected
     let ha_client_lock = ha_client_state.lock().await;
@@ -1582,9 +1961,18 @@ async fn ha_handle_smart_home_command(
     // Execute based on intent
     match intent {
         SmartHomeIntent::TurnOn { room, device_type, device_name: _ } => {
+            // AC3: Apply contextual defaults - use user's default room if not specified
+            let effective_room = room.clone().or_else(|| {
+                user_prefs.as_ref().and_then(|p| p.default_room.clone())
+            });
+
+            if effective_room.is_some() && effective_room.as_ref() != room.as_ref() {
+                log::debug!("Applied default room: {:?}", effective_room);
+            }
+
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
-                area: room.clone(),
+                area: effective_room,
                 device_class: None,
                 state: None,
             }).await;
@@ -1610,9 +1998,14 @@ async fn ha_handle_smart_home_command(
         }
 
         SmartHomeIntent::TurnOff { room, device_type, device_name: _ } => {
+            // AC3: Apply contextual defaults - use user's default room if not specified
+            let effective_room = room.clone().or_else(|| {
+                user_prefs.as_ref().and_then(|p| p.default_room.clone())
+            });
+
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
-                area: room.clone(),
+                area: effective_room,
                 device_class: None,
                 state: None,
             }).await;
@@ -1638,9 +2031,14 @@ async fn ha_handle_smart_home_command(
         }
 
         SmartHomeIntent::SetBrightness { room, device_name: _, brightness } => {
+            // AC3: Apply contextual defaults - use user's default room if not specified
+            let effective_room = room.clone().or_else(|| {
+                user_prefs.as_ref().and_then(|p| p.default_room.clone())
+            });
+
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("light".to_string()),
-                area: room.clone(),
+                area: effective_room,
                 device_class: None,
                 state: None,
             }).await;
@@ -1663,9 +2061,14 @@ async fn ha_handle_smart_home_command(
         }
 
         SmartHomeIntent::SetTemperature { room, temperature, unit } => {
+            // AC3: Apply contextual defaults - use user's default room if not specified
+            let effective_room = room.clone().or_else(|| {
+                user_prefs.as_ref().and_then(|p| p.default_room.clone())
+            });
+
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: Some("climate".to_string()),
-                area: room.clone(),
+                area: effective_room,
                 device_class: None,
                 state: None,
             }).await;
@@ -1792,27 +2195,75 @@ async fn ha_handle_smart_home_command(
             Ok(format!("✓ Unlocked {} lock{}", entities.len(), if entities.len() == 1 { "" } else { "s" }))
         }
 
-        SmartHomeIntent::ActivateScene { scene_name } => {
-            let entities = entity_manager.get_all_entities().await;
+        SmartHomeIntent::ActivateScene { scene_name, user_id: intent_user_id } => {
+            // If user_id is provided, try to resolve personal shortcut first
+            let mut resolved_entity_id: Option<String> = None;
 
-            // Find scene entity
-            let scene_entity = entities.iter().find(|e| {
-                e.entity_id.starts_with("scene.") &&
-                e.attributes.friendly_name.as_ref().map(|n| n.to_lowercase().contains(&scene_name.to_lowercase())).unwrap_or(false)
-            });
+            if let Some(uid) = intent_user_id {
+                log::debug!("Checking personal shortcuts for user_id={}, shortcut_name='{}'", uid, scene_name);
 
-            if let Some(scene) = scene_entity {
-                let _ = client.call_service("scene", "turn_on", &scene.entity_id, None).await;
-                Ok(format!("✓ Activated {} scene", scene_name))
+                let database = db.lock().await;
+                match database.query_rows(
+                    "SELECT ha_entity_id FROM user_ha_shortcuts WHERE user_id = ? AND LOWER(shortcut_name) = LOWER(?)",
+                    &[&uid, &scene_name as &dyn rusqlite::ToSql],
+                    |row| row.get::<_, String>(0)
+                ) {
+                    Ok(mut results) => {
+                        if !results.is_empty() {
+                            resolved_entity_id = Some(results.remove(0));
+                            log::debug!("✓ Resolved personal shortcut '{}' -> '{}'", scene_name, resolved_entity_id.as_ref().unwrap());
+                        } else {
+                            log::debug!("Personal shortcut '{}' not found for user_id={}", scene_name, uid);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to lookup personal shortcut: {}", e);
+                    }
+                }
+            }
+
+            // If we have a resolved entity_id from personal shortcuts, use it
+            if let Some(entity_id) = resolved_entity_id {
+                // Determine service based on entity type
+                let (domain, service) = if entity_id.starts_with("scene.") {
+                    ("scene", "turn_on")
+                } else if entity_id.starts_with("script.") {
+                    ("script", "turn_on")
+                } else {
+                    log::warn!("Unknown entity type for personal shortcut: {}", entity_id);
+                    return Ok(format!("I couldn't activate your shortcut '{}' (unsupported entity type)", scene_name));
+                };
+
+                let _ = client.call_service(domain, service, &entity_id, None).await;
+                Ok(format!("✓ Activated your {} ({})", scene_name, entity_id))
             } else {
-                Ok(format!("I couldn't find a scene named '{}'", scene_name))
+                // Fall back to searching HA scene entities
+                let entities = entity_manager.get_all_entities().await;
+
+                // Find scene entity
+                let scene_entity = entities.iter().find(|e| {
+                    e.entity_id.starts_with("scene.") &&
+                    e.attributes.friendly_name.as_ref().map(|n| n.to_lowercase().contains(&scene_name.to_lowercase())).unwrap_or(false)
+                });
+
+                if let Some(scene) = scene_entity {
+                    let _ = client.call_service("scene", "turn_on", &scene.entity_id, None).await;
+                    Ok(format!("✓ Activated {} scene", scene_name))
+                } else {
+                    Ok(format!("I couldn't find a scene named '{}'", scene_name))
+                }
             }
         }
 
         SmartHomeIntent::Toggle { room, device_type, device_name: _ } => {
+            // AC3: Apply contextual defaults
+            let effective_room = room.clone().or_else(|| {
+                user_prefs.as_ref().and_then(|p| p.default_room.clone())
+            });
+
             let entities = entity_manager.query_entities(EntityFilter {
                 domain: device_type.clone(),
-                area: room.clone(),
+                area: effective_room,
                 device_class: None,
                 state: None,
             }).await;
@@ -1857,6 +2308,196 @@ async fn ha_dismiss_onboarding(
     log::info!("✓ Home Assistant onboarding dismissed");
 
     Ok(())
+}
+
+// ============================================================================
+// User-Specific Home Assistant Commands (Personalization)
+// ============================================================================
+
+/// List all Home Assistant shortcuts for a specific user
+#[tauri::command]
+async fn list_user_ha_shortcuts(
+    user_id: i64,
+    db: State<'_, DatabaseState>,
+) -> Result<Vec<UserHAShortcut>, AuraError> {
+    log::info!("Listing HA shortcuts for user_id={}", user_id);
+
+    let database = db.lock().await;
+    let shortcuts = database.query_rows(
+        "SELECT id, user_id, shortcut_name, ha_entity_id, entity_type, created_at FROM user_ha_shortcuts WHERE user_id = ?",
+        &[&user_id],
+        |row| {
+            Ok(UserHAShortcut {
+                id: row.get(0)?,
+                user_id: row.get(1)?,
+                shortcut_name: row.get(2)?,
+                ha_entity_id: row.get(3)?,
+                entity_type: row.get(4)?,
+                created_at: row.get(5)?,
+            })
+        }
+    ).map_err(|e| AuraError::Database(format!("Failed to query shortcuts: {}", e)))?;
+
+    log::info!("Found {} shortcut(s) for user_id={}", shortcuts.len(), user_id);
+    Ok(shortcuts)
+}
+
+/// Create a new Home Assistant shortcut for a user
+#[tauri::command]
+async fn create_user_ha_shortcut(
+    user_id: i64,
+    shortcut_name: String,
+    ha_entity_id: String,
+    entity_type: String,
+    db: State<'_, DatabaseState>,
+) -> Result<i64, AuraError> {
+    log::info!(
+        "Creating HA shortcut: user_id={}, name='{}', entity='{}', type='{}'",
+        user_id, shortcut_name, ha_entity_id, entity_type
+    );
+
+    // Validate entity_type
+    if entity_type != "scene" && entity_type != "script" {
+        return Err(AuraError::Database(format!(
+            "Invalid entity_type '{}'. Must be 'scene' or 'script'",
+            entity_type
+        )));
+    }
+
+    let database = db.lock().await;
+    let created_at = chrono::Utc::now().to_rfc3339();
+
+    let shortcut_id = database.execute_and_get_last_id(
+        "INSERT INTO user_ha_shortcuts (user_id, shortcut_name, ha_entity_id, entity_type, created_at) VALUES (?, ?, ?, ?, ?)",
+        &[&user_id, &shortcut_name as &dyn rusqlite::ToSql, &ha_entity_id as &dyn rusqlite::ToSql, &entity_type as &dyn rusqlite::ToSql, &created_at as &dyn rusqlite::ToSql],
+    ).map_err(|e| AuraError::Database(format!("Failed to create shortcut: {}", e)))?;
+
+    log::info!("✓ Created shortcut with id={}", shortcut_id);
+
+    Ok(shortcut_id)
+}
+
+/// Delete a Home Assistant shortcut
+#[tauri::command]
+async fn delete_user_ha_shortcut(
+    shortcut_id: i64,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!("Deleting HA shortcut id={}", shortcut_id);
+
+    let database = db.lock().await;
+    let rows_affected = database.execute_query(
+        "DELETE FROM user_ha_shortcuts WHERE id = ?",
+        &[&shortcut_id],
+    ).map_err(|e| AuraError::Database(format!("Failed to delete shortcut: {}", e)))?;
+
+    if rows_affected == 0 {
+        return Err(AuraError::Database(format!(
+            "Shortcut with id={} not found",
+            shortcut_id
+        )));
+    }
+
+    log::info!("✓ Deleted shortcut id={}", shortcut_id);
+    Ok(())
+}
+
+/// Get Home Assistant preferences for a specific user
+#[tauri::command]
+async fn get_user_ha_preferences(
+    user_id: i64,
+    db: State<'_, DatabaseState>,
+) -> Result<Option<UserHAPreferences>, AuraError> {
+    log::info!("Getting HA preferences for user_id={}", user_id);
+
+    let database = db.lock().await;
+    let mut prefs_vec = database.query_rows(
+        "SELECT user_id, default_room, default_light_entity, default_climate_entity, default_media_player_entity, updated_at FROM user_ha_preferences WHERE user_id = ?",
+        &[&user_id],
+        |row| {
+            Ok(UserHAPreferences {
+                user_id: row.get(0)?,
+                default_room: row.get(1)?,
+                default_light_entity: row.get(2)?,
+                default_climate_entity: row.get(3)?,
+                default_media_player_entity: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        }
+    ).map_err(|e| AuraError::Database(format!("Failed to query preferences: {}", e)))?;
+
+    let prefs = if prefs_vec.is_empty() {
+        None
+    } else {
+        Some(prefs_vec.remove(0))
+    };
+
+    if prefs.is_some() {
+        log::info!("✓ Found preferences for user_id={}", user_id);
+    } else {
+        log::info!("No preferences found for user_id={}", user_id);
+    }
+
+    Ok(prefs)
+}
+
+/// Update Home Assistant preferences for a specific user
+#[tauri::command]
+async fn update_user_ha_preferences(
+    user_id: i64,
+    default_room: Option<String>,
+    default_light_entity: Option<String>,
+    default_climate_entity: Option<String>,
+    default_media_player_entity: Option<String>,
+    db: State<'_, DatabaseState>,
+) -> Result<(), AuraError> {
+    log::info!(
+        "Updating HA preferences for user_id={}: room={:?}, light={:?}, climate={:?}, media={:?}",
+        user_id, default_room, default_light_entity, default_climate_entity, default_media_player_entity
+    );
+
+    let database = db.lock().await;
+    let updated_at = chrono::Utc::now().to_rfc3339();
+
+    // Use INSERT OR REPLACE to handle both create and update cases
+    database.execute_query(
+        "INSERT OR REPLACE INTO user_ha_preferences (user_id, default_room, default_light_entity, default_climate_entity, default_media_player_entity, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+        &[&user_id, &default_room as &dyn rusqlite::ToSql, &default_light_entity as &dyn rusqlite::ToSql, &default_climate_entity as &dyn rusqlite::ToSql, &default_media_player_entity as &dyn rusqlite::ToSql, &updated_at as &dyn rusqlite::ToSql],
+    ).map_err(|e| AuraError::Database(format!("Failed to update preferences: {}", e)))?;
+
+    log::info!("✓ Updated preferences for user_id={}", user_id);
+    Ok(())
+}
+
+/// Lookup a user's shortcut by name (for NLU resolution)
+#[tauri::command]
+async fn lookup_user_shortcut(
+    user_id: i64,
+    shortcut_name: String,
+    db: State<'_, DatabaseState>,
+) -> Result<Option<String>, AuraError> {
+    log::debug!("Looking up shortcut '{}' for user_id={}", shortcut_name, user_id);
+
+    let database = db.lock().await;
+    let mut entity_ids = database.query_rows(
+        "SELECT ha_entity_id FROM user_ha_shortcuts WHERE user_id = ? AND LOWER(shortcut_name) = LOWER(?)",
+        &[&user_id, &shortcut_name as &dyn rusqlite::ToSql],
+        |row| row.get::<_, String>(0)
+    ).map_err(|e| AuraError::Database(format!("Failed to lookup shortcut: {}", e)))?;
+
+    let entity_id = if entity_ids.is_empty() {
+        None
+    } else {
+        Some(entity_ids.remove(0))
+    };
+
+    if let Some(ref id) = entity_id {
+        log::debug!("✓ Resolved '{}' -> '{}'", shortcut_name, id);
+    } else {
+        log::debug!("Shortcut '{}' not found for user_id={}", shortcut_name, user_id);
+    }
+
+    Ok(entity_id)
 }
 
 // ============================================================================
@@ -2142,6 +2783,12 @@ pub fn run() {
             spotify_control_playback,
             spotify_get_current_track,
             spotify_get_devices,
+            // Multi-User Spotify commands (AC2 & AC3)
+            list_user_profiles_with_spotify,
+            user_spotify_start_auth,
+            user_spotify_disconnect,
+            check_global_spotify_migration,
+            migrate_global_spotify_to_user,
             // Home Assistant Integration commands
             ha_connect,
             ha_disconnect,
@@ -2151,6 +2798,13 @@ pub fn run() {
             ha_call_service,
             ha_handle_smart_home_command,
             ha_dismiss_onboarding,
+            // User-Specific Home Assistant commands (Personalization)
+            list_user_ha_shortcuts,
+            create_user_ha_shortcut,
+            delete_user_ha_shortcut,
+            get_user_ha_preferences,
+            update_user_ha_preferences,
+            lookup_user_shortcut,
             // Voice Biometrics commands
             voice_biometrics_status,
             voice_biometrics_list_users,

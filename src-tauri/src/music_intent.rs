@@ -8,22 +8,31 @@ use regex::Regex;
 use once_cell::sync::Lazy;
 
 /// Music command intent types
+///
+/// **AC2: Possessive Context Support**
+/// Each variant now includes an `is_possessive` field to indicate if the command
+/// used possessive pronouns like "my" (e.g., "play my workout playlist").
+/// This context is used for multi-user personalization to ensure the correct
+/// user's playlists and preferences are accessed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MusicIntent {
     /// Play a specific song, optionally by a specific artist
     PlaySong {
         song: String,
         artist: Option<String>,
+        is_possessive: bool, // NEW: True if command used "my" or similar
     },
 
     /// Play a user's playlist by name
     PlayPlaylist {
         playlist_name: String,
+        is_possessive: bool, // NEW: True if command used "my playlist"
     },
 
     /// Play music by a specific artist (top tracks)
     PlayArtist {
         artist: String,
+        is_possessive: bool, // NEW: True if command used "my" or similar
     },
 
     /// Pause current playback
@@ -54,11 +63,17 @@ static RE_PLAY_SONG_WITH_ARTIST: Lazy<Regex> = Lazy::new(|| {
 });
 
 static RE_PLAY_PLAYLIST: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)play\s+(?:my\s+)?(.+?)\s+playlist").unwrap()
+    // Captures "my" as optional group 1, playlist name as group 2
+    Regex::new(r"(?i)play\s+(my\s+)?(.+?)\s+playlist").unwrap()
 });
 
 static RE_PLAY_SONG_OR_ARTIST: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)play\s+(.+)").unwrap()
+});
+
+// **AC2: Possessive pronoun detection**
+static RE_POSSESSIVE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(my|mine|our|ours)\b").unwrap()
 });
 
 impl MusicIntentParser {
@@ -81,6 +96,9 @@ impl MusicIntentParser {
     pub fn parse(text: &str) -> MusicIntent {
         let text_lower = text.to_lowercase();
         let text_trimmed = text_lower.trim();
+
+        // **AC2: Detect possessive pronouns in the command**
+        let is_possessive = Self::is_possessive(text_trimmed);
 
         // Check for control commands first (highest priority)
         if Self::is_pause_command(text_trimmed) {
@@ -107,12 +125,19 @@ impl MusicIntentParser {
         if text_trimmed.contains("play") {
             // Try to parse playlist command
             if let Some(playlist_name) = Self::extract_playlist(text_trimmed) {
-                return MusicIntent::PlayPlaylist { playlist_name };
+                return MusicIntent::PlayPlaylist {
+                    playlist_name,
+                    is_possessive, // AC2: Pass possessive context
+                };
             }
 
             // Try to parse song with artist
             if let Some((song, artist)) = Self::extract_song_and_artist(text_trimmed) {
-                return MusicIntent::PlaySong { song, artist };
+                return MusicIntent::PlaySong {
+                    song,
+                    artist,
+                    is_possessive, // AC2: Pass possessive context
+                };
             }
 
             // Fallback: treat as song or artist name
@@ -120,17 +145,29 @@ impl MusicIntentParser {
                 // Heuristic: if query looks like an artist name (short, capitalized), treat as artist
                 // Otherwise, treat as song
                 if Self::looks_like_artist_name(&query) {
-                    return MusicIntent::PlayArtist { artist: query };
+                    return MusicIntent::PlayArtist {
+                        artist: query,
+                        is_possessive, // AC2: Pass possessive context
+                    };
                 } else {
                     return MusicIntent::PlaySong {
                         song: query,
                         artist: None,
+                        is_possessive, // AC2: Pass possessive context
                     };
                 }
             }
         }
 
         MusicIntent::Unknown
+    }
+
+    /// Check if the command contains possessive pronouns (AC2)
+    ///
+    /// Detects words like "my", "mine", "our", "ours" to identify
+    /// user-specific commands that require personalization.
+    fn is_possessive(text: &str) -> bool {
+        RE_POSSESSIVE.is_match(text)
     }
 
     /// Check if the command is a pause command
@@ -171,10 +208,12 @@ impl MusicIntentParser {
             && (text.contains("playing") || text.contains("song") || text.contains("track"))
     }
 
-    /// Extract playlist name from command
+    /// Extract playlist name from command (AC2)
+    ///
+    /// Regex groups: group 1 = "my " (optional), group 2 = playlist name
     fn extract_playlist(text: &str) -> Option<String> {
         RE_PLAY_PLAYLIST.captures(text).and_then(|caps| {
-            caps.get(1).map(|m| {
+            caps.get(2).map(|m| {  // Group 2 is the playlist name
                 Self::title_case(m.as_str().trim())
             })
         })
@@ -257,7 +296,8 @@ mod tests {
             intent,
             MusicIntent::PlaySong {
                 song: "Despacito".to_string(),
-                artist: Some("Luis Fonsi".to_string())
+                artist: Some("Luis Fonsi".to_string()),
+                is_possessive: false,
             }
         );
     }
@@ -269,7 +309,8 @@ mod tests {
             intent,
             MusicIntent::PlaySong {
                 song: "Bohemian Rhapsody".to_string(),
-                artist: Some("Queen".to_string())
+                artist: Some("Queen".to_string()),
+                is_possessive: false,
             }
         );
     }
@@ -281,7 +322,8 @@ mod tests {
             intent,
             MusicIntent::PlaySong {
                 song: "Imagine".to_string(),
-                artist: None
+                artist: None,
+                is_possessive: false,
             }
         );
     }
@@ -292,7 +334,8 @@ mod tests {
         assert_eq!(
             intent,
             MusicIntent::PlayPlaylist {
-                playlist_name: "Workout".to_string()
+                playlist_name: "Workout".to_string(),
+                is_possessive: true, // AC2: "my" detected
             }
         );
     }
@@ -303,7 +346,8 @@ mod tests {
         assert_eq!(
             intent,
             MusicIntent::PlayPlaylist {
-                playlist_name: "Chill Vibes".to_string()
+                playlist_name: "Chill Vibes".to_string(),
+                is_possessive: false, // AC2: No possessive pronoun
             }
         );
     }

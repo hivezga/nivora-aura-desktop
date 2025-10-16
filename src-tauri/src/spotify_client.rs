@@ -162,6 +162,14 @@ pub struct DevicesResponse {
     pub devices: Vec<Device>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct SpotifyUserInfo {
+    pub id: String,
+    pub display_name: String,
+    pub email: String,
+    pub product: Option<String>, // "premium" or "free"
+}
+
 #[derive(Debug, Serialize)]
 struct PlayRequest {
     uris: Vec<String>,
@@ -682,6 +690,27 @@ impl SpotifyClient {
         log::info!("Found {} devices", devices_response.devices.len());
 
         Ok(devices_response.devices)
+    }
+
+    /// Get current user's Spotify profile information
+    pub async fn get_current_user(&self) -> Result<SpotifyUserInfo, SpotifyError> {
+        log::info!("Fetching current user info");
+
+        let response = self.get("/me").await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await.unwrap_or_default();
+            return Err(SpotifyError::ApiError(error_text));
+        }
+
+        let user_info: SpotifyUserInfo = response
+            .json()
+            .await
+            .map_err(|e| SpotifyError::ParseError(e.to_string()))?;
+
+        log::info!("✓ Current user: {}", user_info.display_name);
+
+        Ok(user_info)
     }
 }
 

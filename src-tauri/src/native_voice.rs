@@ -412,11 +412,13 @@ impl NativeVoicePipeline {
     /// 4. Waits for recording to complete (silence detected) or timeout
     /// 5. Feeds accumulated audio to whisper-rs
     /// 6. Returns state to ListeningForWakeWord
-    /// 7. Returns the transcribed text
+    /// 7. Returns the transcribed text and audio samples (for speaker identification)
     ///
     /// This function is idempotent and thread-safe - it can be safely called
     /// multiple times in a row without state corruption.
-    pub fn start_transcription(&self) -> Result<String, String> {
+    ///
+    /// Returns: (transcription_text, audio_samples)
+    pub fn start_transcription(&self) -> Result<(String, Vec<f32>), String> {
         info!("Transcription triggered");
 
         if !self.wake_word_active.load(Ordering::Relaxed) {
@@ -560,8 +562,12 @@ impl NativeVoicePipeline {
 
         info!("Pipeline reset complete - ready for next transcription");
 
-        // Return the transcription result (propagate any errors)
-        transcription_result
+        // Return the transcription result and audio samples (for speaker identification)
+        // Clone the samples before cleanup so they can be used for speaker ID
+        match transcription_result {
+            Ok(text) => Ok((text, recording_samples)),
+            Err(e) => Err(e),
+        }
     }
 
     /// Get the last captured audio samples for speaker identification

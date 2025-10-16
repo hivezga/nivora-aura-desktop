@@ -22,6 +22,28 @@ pub struct Message {
     pub timestamp: String,
 }
 
+/// Represents a user's Home Assistant shortcut (scene or script)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserHAShortcut {
+    pub id: i64,
+    pub user_id: i64,
+    pub shortcut_name: String,    // User's custom name (e.g., "my focus mode")
+    pub ha_entity_id: String,     // e.g., "scene.focus_mode" or "script.morning_routine"
+    pub entity_type: String,      // "scene" or "script"
+    pub created_at: String,
+}
+
+/// Represents a user's Home Assistant preferences (default devices/rooms)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserHAPreferences {
+    pub user_id: i64,
+    pub default_room: Option<String>,
+    pub default_light_entity: Option<String>,
+    pub default_climate_entity: Option<String>,
+    pub default_media_player_entity: Option<String>,
+    pub updated_at: String,
+}
+
 /// Represents application settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -168,6 +190,107 @@ impl Database {
                 [],
             )
             .map_err(|e| format!("Failed to create user_profiles active index: {}", e))?;
+
+        // **AC2: Multi-User Spotify Integration** - Add Spotify columns to user_profiles
+        // Use ALTER TABLE to add columns if they don't exist (safe for existing databases)
+        let spotify_columns = vec![
+            ("spotify_connected", "BOOLEAN DEFAULT 0"),
+            ("spotify_client_id", "TEXT DEFAULT ''"),
+            ("spotify_user_id", "TEXT DEFAULT ''"),
+            ("spotify_display_name", "TEXT DEFAULT ''"),
+            ("spotify_email", "TEXT DEFAULT ''"),
+            ("auto_play_enabled", "BOOLEAN DEFAULT 1"),
+            ("spotify_connected_at", "TEXT DEFAULT NULL"),
+            ("last_spotify_refresh", "TEXT DEFAULT NULL"),
+        ];
+
+        for (column_name, column_def) in spotify_columns {
+            // Check if column exists
+            let column_exists: Result<i32, _> = self.conn.query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('user_profiles') WHERE name = ?1",
+                params![column_name],
+                |row| row.get(0),
+            );
+
+            if let Ok(count) = column_exists {
+                if count == 0 {
+                    // Column doesn't exist, add it
+                    let alter_sql = format!("ALTER TABLE user_profiles ADD COLUMN {} {}", column_name, column_def);
+                    self.conn
+                        .execute(&alter_sql, [])
+                        .map_err(|e| format!("Failed to add column {}: {}", column_name, e))?;
+                    log::info!("Added Spotify column '{}' to user_profiles table", column_name);
+                }
+            }
+        }
+
+        // Create indexes for Spotify columns
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_profiles_spotify_connected
+                 ON user_profiles(spotify_connected)",
+                [],
+            )
+            .map_err(|e| format!("Failed to create spotify_connected index: {}", e))?;
+
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_profiles_spotify_user_id
+                 ON user_profiles(spotify_user_id)",
+                [],
+            )
+            .map_err(|e| format!("Failed to create spotify_user_id index: {}", e))?;
+
+        // **AC1: Personalized Smart Home** - Create user_ha_shortcuts table for personal scene/script shortcuts
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS user_ha_shortcuts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    shortcut_name TEXT NOT NULL,
+                    ha_entity_id TEXT NOT NULL,
+                    entity_type TEXT NOT NULL CHECK(entity_type IN ('scene', 'script')),
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE
+                )",
+                [],
+            )
+            .map_err(|e| format!("Failed to create user_ha_shortcuts table: {}", e))?;
+
+        // Create indexes for user_ha_shortcuts table
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_ha_shortcuts_user_id
+                 ON user_ha_shortcuts(user_id)",
+                [],
+            )
+            .map_err(|e| format!("Failed to create user_ha_shortcuts user_id index: {}", e))?;
+
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_ha_shortcuts_shortcut_name
+                 ON user_ha_shortcuts(user_id, shortcut_name)",
+                [],
+            )
+            .map_err(|e| format!("Failed to create user_ha_shortcuts shortcut_name index: {}", e))?;
+
+        // **AC3: Contextual Control** - Create user_ha_preferences table for default room/device preferences
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS user_ha_preferences (
+                    user_id INTEGER PRIMARY KEY,
+                    default_room TEXT,
+                    default_light_entity TEXT,
+                    default_climate_entity TEXT,
+                    default_media_player_entity TEXT,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES user_profiles(id) ON DELETE CASCADE
+                )",
+                [],
+            )
+            .map_err(|e| format!("Failed to create user_ha_preferences table: {}", e))?;
+
+        log::info!("User Home Assistant personalization tables initialized");
 
         // Insert default settings if they don't exist
         self.conn
