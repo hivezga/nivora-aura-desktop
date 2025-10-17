@@ -24,9 +24,10 @@ import { showErrorToast } from "../utils/errorHandler";
 import SpotifySettings from "./SpotifySettings";
 import HomeAssistantSettings from "./HomeAssistantSettings";
 import UserProfilesSettings from "./UserProfilesSettings";
+import ThemeSelector from "./ThemeSelector";
 
 // Category types
-type CategoryId = "llm" | "voice" | "profiles" | "integrations" | "general";
+type CategoryId = "llm" | "voice" | "profiles" | "integrations" | "appearance" | "general";
 
 interface Category {
   id: CategoryId;
@@ -48,6 +49,7 @@ const CATEGORIES: Category[] = [
       { id: "homeassistant", label: "Home Assistant" },
     ]
   },
+  { id: "appearance", label: "Appearance", icon: "🎨" },
   { id: "general", label: "General", icon: "⚙️" },
 ];
 
@@ -77,6 +79,11 @@ const SettingsModal: React.FC = () => {
   const [vadTimeoutMs, setVadTimeoutMs] = useState(settings.vad_timeout_ms);
   const [sttModelName, setSttModelName] = useState(settings.stt_model_name);
   const [voicePreference, setVoicePreference] = useState(settings.voice_preference);
+  const [onlineModeEnabled, setOnlineModeEnabled] = useState(settings.online_mode_enabled);
+  const [searchBackend, setSearchBackend] = useState(settings.search_backend);
+  const [searxngInstanceUrl, setSearxngInstanceUrl] = useState(settings.searxng_instance_url);
+  const [braveSearchApiKey, setBraveSearchApiKey] = useState(settings.brave_search_api_key || "");
+  const [maxSearchResults, setMaxSearchResults] = useState(settings.max_search_results);
   const [isSaving, setIsSaving] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
@@ -119,6 +126,11 @@ const SettingsModal: React.FC = () => {
     setVadTimeoutMs(settings.vad_timeout_ms);
     setSttModelName(settings.stt_model_name);
     setVoicePreference(settings.voice_preference);
+    setOnlineModeEnabled(settings.online_mode_enabled);
+    setSearchBackend(settings.search_backend);
+    setSearxngInstanceUrl(settings.searxng_instance_url);
+    setBraveSearchApiKey(settings.brave_search_api_key || "");
+    setMaxSearchResults(settings.max_search_results);
   }, [settings]);
 
   const handleSave = async () => {
@@ -142,6 +154,11 @@ const SettingsModal: React.FC = () => {
         vadTimeoutMs,
         sttModelName,
         voicePreference,
+        onlineModeEnabled,
+        searchBackend,
+        searxngInstanceUrl,
+        braveSearchApiKey: braveSearchApiKey.trim() || null,
+        maxSearchResults,
       });
 
       // Reload voice pipeline with new settings
@@ -168,6 +185,11 @@ const SettingsModal: React.FC = () => {
         vad_timeout_ms: vadTimeoutMs,
         stt_model_name: sttModelName,
         voice_preference: voicePreference,
+        online_mode_enabled: onlineModeEnabled,
+        search_backend: searchBackend,
+        searxng_instance_url: searxngInstanceUrl,
+        brave_search_api_key: braveSearchApiKey.trim() || undefined,
+        max_search_results: maxSearchResults,
       });
 
       console.log("Settings saved and voice pipeline reloaded successfully");
@@ -195,6 +217,11 @@ const SettingsModal: React.FC = () => {
       setVadTimeoutMs(settings.vad_timeout_ms);
       setSttModelName(settings.stt_model_name);
       setVoicePreference(settings.voice_preference);
+      setOnlineModeEnabled(settings.online_mode_enabled);
+      setSearchBackend(settings.search_backend);
+      setSearxngInstanceUrl(settings.searxng_instance_url);
+      setBraveSearchApiKey(settings.brave_search_api_key || "");
+      setMaxSearchResults(settings.max_search_results);
       closeSettings();
     }
   };
@@ -340,6 +367,126 @@ const SettingsModal: React.FC = () => {
             Wake word detection uses energy-based VAD - no additional models needed.
             Adjust microphone sensitivity in Voice & Audio settings if needed.
           </p>
+        )}
+      </div>
+
+      {/* Online Mode (RAG) Settings */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <Label htmlFor="online-mode-enabled" className="text-gray-300">
+              Enable Online Mode
+            </Label>
+            <p className="text-xs text-gray-500">
+              Augment LLM responses with web search results (privacy-focused, opt-in only)
+            </p>
+          </div>
+          <Switch
+            id="online-mode-enabled"
+            checked={onlineModeEnabled}
+            onCheckedChange={setOnlineModeEnabled}
+          />
+        </div>
+        {onlineModeEnabled && (
+          <>
+            <p className="text-xs text-gray-400 mt-2">
+              When enabled, your queries will be enriched with web search context using privacy-focused search providers (SearXNG by default).
+              All searches are opt-in and can be disabled anytime.
+            </p>
+
+            {/* Search Backend Selection */}
+            <div className="space-y-2 mt-4">
+              <Label htmlFor="search-backend" className="text-gray-300">
+                Search Backend
+              </Label>
+              <Select value={searchBackend} onValueChange={setSearchBackend}>
+                <SelectTrigger
+                  id="search-backend"
+                  className="w-full bg-gray-800 text-gray-100 border-gray-700 focus:ring-gray-600"
+                >
+                  <SelectValue placeholder="Select backend" />
+                </SelectTrigger>
+                <SelectContent className="bg-gray-800 border-gray-700">
+                  <SelectItem
+                    value="searxng"
+                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                  >
+                    SearXNG (Privacy-focused, no API key)
+                  </SelectItem>
+                  <SelectItem
+                    value="brave"
+                    className="text-gray-100 focus:bg-gray-700 focus:text-gray-100"
+                  >
+                    Brave Search (Requires API key)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* SearXNG Instance URL - AC2, AC3 */}
+            {searchBackend === "searxng" && (
+              <div className="space-y-2 mt-4">
+                <Label htmlFor="searxng-url" className="text-gray-300">
+                  SearXNG Instance URL
+                </Label>
+                <Input
+                  type="url"
+                  id="searxng-url"
+                  value={searxngInstanceUrl}
+                  onChange={(e) => setSearxngInstanceUrl(e.target.value)}
+                  placeholder="https://searx.be"
+                  className="bg-gray-800 text-gray-100 border-gray-700 focus:ring-gray-600 placeholder-gray-500"
+                />
+                <p className="text-xs text-gray-500">
+                  Use a public SearXNG instance or your own self-hosted instance for web searches.
+                  Popular instances: searx.be, searx.work, search.bus-hit.me
+                </p>
+              </div>
+            )}
+
+            {/* Brave Search API Key */}
+            {searchBackend === "brave" && (
+              <div className="space-y-2 mt-4">
+                <Label htmlFor="brave-api-key" className="text-gray-300">
+                  Brave Search API Key
+                </Label>
+                <Input
+                  type="password"
+                  id="brave-api-key"
+                  value={braveSearchApiKey}
+                  onChange={(e) => setBraveSearchApiKey(e.target.value)}
+                  placeholder="Enter your Brave Search API key"
+                  className="bg-gray-800 text-gray-100 border-gray-700 focus:ring-gray-600 placeholder-gray-500"
+                />
+                <p className="text-xs text-gray-500">
+                  Get your API key from the Brave Search API dashboard. Stored securely in your system keychain.
+                </p>
+              </div>
+            )}
+
+            {/* Max Search Results */}
+            <div className="space-y-2 mt-4">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="max-results" className="text-gray-300">
+                  Max Search Results
+                </Label>
+                <span className="text-sm text-gray-400">{maxSearchResults}</span>
+              </div>
+              <input
+                type="range"
+                id="max-results"
+                min="1"
+                max="20"
+                step="1"
+                value={maxSearchResults}
+                onChange={(e) => setMaxSearchResults(parseInt(e.target.value))}
+                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-gray-600"
+              />
+              <p className="text-xs text-gray-500">
+                Number of search results to include in LLM context (1-20, default: 5)
+              </p>
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -556,9 +703,10 @@ const SettingsModal: React.FC = () => {
           <button
             className={`px-4 py-2 text-sm font-medium transition-colors ${
               activeSubcategory === "spotify"
-                ? "text-gray-100 border-b-2 border-gray-500"
+                ? "text-gray-100 border-b-2"
                 : "text-gray-400 hover:text-gray-200"
             }`}
+            style={activeSubcategory === "spotify" ? { borderColor: "var(--accent-primary)" } : {}}
             onClick={() => setActiveSubcategory("spotify")}
           >
             Spotify
@@ -566,9 +714,10 @@ const SettingsModal: React.FC = () => {
           <button
             className={`px-4 py-2 text-sm font-medium transition-colors ${
               activeSubcategory === "homeassistant"
-                ? "text-gray-100 border-b-2 border-gray-500"
+                ? "text-gray-100 border-b-2"
                 : "text-gray-400 hover:text-gray-200"
             }`}
+            style={activeSubcategory === "homeassistant" ? { borderColor: "var(--accent-primary)" } : {}}
             onClick={() => setActiveSubcategory("homeassistant")}
           >
             Home Assistant
@@ -580,6 +729,33 @@ const SettingsModal: React.FC = () => {
       </div>
     );
   };
+
+  const renderAppearanceSettings = () => (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-xl font-semibold text-gray-100 mb-2">Appearance</h2>
+        <p className="text-sm text-gray-400">
+          Customize the visual theme and appearance of Aura
+        </p>
+      </div>
+
+      <ThemeSelector showTitle={false} />
+
+      <div className="border-t border-gray-800 pt-5"></div>
+
+      <div className="bg-gray-800/50 border border-gray-700 rounded-lg p-4">
+        <p className="text-xs text-gray-400">
+          <strong className="text-gray-300">Theme Tips:</strong>
+        </p>
+        <ul className="text-xs text-gray-500 mt-2 space-y-1 list-disc list-inside">
+          <li><strong>Monochromatic:</strong> Clean, focused, and distraction-free with neutral gray accents</li>
+          <li><strong>Vibrant:</strong> Expressive and brand-forward with bold pink/magenta accents</li>
+          <li>Changes apply immediately and persist across sessions</li>
+          <li>Logo and UI elements update automatically to match your theme</li>
+        </ul>
+      </div>
+    </div>
+  );
 
   const renderGeneralSettings = () => (
     <div className="space-y-5">
@@ -595,7 +771,7 @@ const SettingsModal: React.FC = () => {
           Additional general settings will be available here in future updates.
         </p>
         <p className="text-gray-500 text-xs mt-2">
-          This section is reserved for appearance, language, updates, and other app-wide preferences.
+          This section is reserved for language, updates, and other app-wide preferences.
         </p>
       </div>
     </div>
@@ -612,6 +788,8 @@ const SettingsModal: React.FC = () => {
         return renderUserProfilesSettings();
       case "integrations":
         return renderIntegrationsSettings();
+      case "appearance":
+        return renderAppearanceSettings();
       case "general":
         return renderGeneralSettings();
       default:

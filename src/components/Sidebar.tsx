@@ -1,6 +1,7 @@
 import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useChatStore } from "../store";
+import { useThemeStore } from "../stores/themeStore";
 import { MessageSquare } from "lucide-react";
 import {
   isToday,
@@ -25,6 +26,9 @@ const Sidebar: React.FC = () => {
   const clearMessages = useChatStore((state) => state.clearMessages);
   const removeConversation = useChatStore((state) => state.removeConversation);
   const openSettings = useChatStore((state) => state.openSettings);
+
+  // Get dynamic logo path from theme store
+  const logoPath = useThemeStore((state) => state.logoPath);
 
   /**
    * Format a date as a relative time string
@@ -138,6 +142,15 @@ const Sidebar: React.FC = () => {
 
   return (
     <div className="w-64 bg-gray-900 border-r border-gray-800 flex flex-col">
+      {/* Logo */}
+      <div className="p-6 border-b border-gray-800 flex items-center justify-center">
+        <img
+          src={logoPath}
+          alt="Aura Logo"
+          className="h-16 w-16 transition-opacity duration-300"
+        />
+      </div>
+
       {/* New Chat Button */}
       <div className="p-4 border-b border-gray-800">
         <button

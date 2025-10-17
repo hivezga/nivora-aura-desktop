@@ -25,6 +25,13 @@ export interface Settings {
   stt_model_name: string;       // STT (Whisper) model filename (e.g., "ggml-base.en.bin")
   voice_preference: string;     // TTS voice preference ("male" or "female")
 
+  // RAG / Online Mode Settings
+  online_mode_enabled: boolean;       // Enable/disable web search for RAG (default: false)
+  search_backend: string;             // "searxng" or "brave" (default: "searxng")
+  searxng_instance_url: string;       // SearXNG instance URL (default: "https://searx.be")
+  brave_search_api_key?: string;      // Brave Search API key (optional, stored in OS keyring)
+  max_search_results: number;         // Maximum number of search results to use (1-20, default: 5)
+
   // Spotify Music Integration
   spotify_connected?: boolean;        // Whether Spotify is connected (optional for backward compatibility)
   spotify_client_id?: string;         // Spotify app client ID (optional)
@@ -133,6 +140,10 @@ export const useChatStore = create<ChatStore>((set) => ({
     vad_timeout_ms: 1280,
     stt_model_name: "ggml-base.en.bin",
     voice_preference: "male",
+    online_mode_enabled: false,
+    search_backend: "searxng",
+    searxng_instance_url: "https://searx.be",
+    max_search_results: 5,
   },
   setSettings: (settings) => set({ settings }),
   isSettingsOpen: false,

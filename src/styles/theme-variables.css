@@ -1,0 +1,115 @@
+/**
+ * Aura Theme CSS Variables
+ *
+ * These variables are set dynamically by the theming system
+ * Default values are Monochromatic Dark (initial state)
+ */
+
+:root {
+  /* Theme Colors (dynamically updated) */
+  --background-primary: #343A40;
+  --text-primary: #F5F5F5;
+  --text-secondary: #AAAAAA;
+  --accent-primary: #6C757D;
+  --active-indicator: #808080;
+  --input-background: #495057;
+
+  /* Semantic Color Mappings */
+  --bg-primary: var(--background-primary);
+  --bg-secondary: var(--input-background);
+  --bg-hover: rgba(255, 255, 255, 0.05);
+  --bg-active: rgba(255, 255, 255, 0.1);
+
+  --text-main: var(--text-primary);
+  --text-muted: var(--text-secondary);
+  --text-accent: var(--accent-primary);
+
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-hover: rgba(255, 255, 255, 0.2);
+
+  /* Interactive Elements */
+  --button-primary-bg: var(--accent-primary);
+  --button-primary-hover: var(--active-indicator);
+  --button-primary-text: var(--text-primary);
+
+  --input-bg: var(--input-background);
+  --input-border: var(--border-default);
+  --input-focus: var(--active-indicator);
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-slow: 350ms ease;
+}
+
+/* Light mode adjustments */
+:root[data-color-mode="light"] {
+  --bg-hover: rgba(0, 0, 0, 0.03);
+  --bg-active: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.1);
+  --border-hover: rgba(0, 0, 0, 0.2);
+}
+
+/* Apply theme colors to base elements */
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-main);
+  transition: background-color var(--transition-normal), color var(--transition-normal);
+}
+
+/* Utility classes for themed elements */
+.themed-bg-primary {
+  background-color: var(--bg-primary);
+}
+
+.themed-bg-secondary {
+  background-color: var(--bg-secondary);
+}
+
+.themed-text-primary {
+  color: var(--text-main);
+}
+
+.themed-text-secondary {
+  color: var(--text-muted);
+}
+
+.themed-accent {
+  color: var(--accent-primary);
+}
+
+.themed-accent-bg {
+  background-color: var(--accent-primary);
+}
+
+.themed-border {
+  border-color: var(--border-default);
+}
+
+.themed-active-indicator {
+  background-color: var(--active-indicator);
+}
+
+/* Button theming */
+.btn-themed-primary {
+  background-color: var(--button-primary-bg);
+  color: var(--button-primary-text);
+  transition: background-color var(--transition-fast);
+}
+
+.btn-themed-primary:hover {
+  background-color: var(--button-primary-hover);
+}
+
+/* Input theming */
+.input-themed {
+  background-color: var(--input-bg);
+  border-color: var(--input-border);
+  color: var(--text-main);
+}
+
+.input-themed:focus {
+  border-color: var(--input-focus);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(var(--input-focus), 0.1);
+}

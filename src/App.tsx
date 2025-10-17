@@ -9,6 +9,19 @@ import WelcomeWizard from "./components/WelcomeWizard";
 import { useChatStore } from "./store";
 import { showErrorToast } from "./utils/errorHandler";
 
+// Transcription result structure from backend
+interface TranscriptionResult {
+  text: string;
+  duration_seconds: number;
+  sample_count: number;
+  speaker_info: {
+    user_id: number | null;
+    user_name: string | null;
+    similarity_score: number;
+    identified: boolean;
+  } | null;
+}
+
 type ViewMode = "chat" | "devices";
 
 function App() {
@@ -91,6 +104,11 @@ function App() {
           vad_timeout_ms: dbSettings.vad_timeout_ms ?? 1280,
           stt_model_name: dbSettings.stt_model_name ?? "ggml-tiny.bin",
           voice_preference: dbSettings.voice_preference ?? "male",
+          online_mode_enabled: dbSettings.online_mode_enabled ?? false,
+          search_backend: dbSettings.search_backend ?? "searxng",
+          searxng_instance_url: dbSettings.searxng_instance_url ?? "https://searx.be",
+          brave_search_api_key: dbSettings.brave_search_api_key,
+          max_search_results: dbSettings.max_search_results ?? 5,
         });
 
         console.log("Settings loaded successfully");
@@ -159,10 +177,19 @@ function App() {
       try {
         // Call STT command to record and transcribe audio
         console.log("Starting audio transcription...");
-        const transcription = await invoke<string>("listen_and_transcribe");
-        console.log("Transcription received:", transcription);
+        const result = await invoke<TranscriptionResult>("listen_and_transcribe");
+        console.log("Transcription result received:", result);
 
-        if (transcription && transcription.trim()) {
+        // Defensive check: ensure result and text field are valid
+        if (!result || typeof result.text !== 'string') {
+          console.error("Invalid transcription result:", result);
+          throw new Error("Invalid transcription result received from backend");
+        }
+
+        const transcription = result.text.trim();
+        console.log("Transcription text:", transcription);
+
+        if (transcription) {
           // Set status to processing
           setAppStatus("processing");
 
@@ -302,9 +329,13 @@ function App() {
               onClick={() => setActiveView("chat")}
               className={`px-6 py-3 text-sm font-medium transition-colors ${
                 activeView === "chat"
-                  ? "text-purple-400 border-b-2 border-purple-500 bg-gray-950"
+                  ? "border-b-2 bg-gray-950"
                   : "text-gray-400 hover:text-gray-300 hover:bg-gray-800"
               }`}
+              style={activeView === "chat" ? {
+                color: "var(--active-indicator)",
+                borderColor: "var(--active-indicator)"
+              } : {}}
             >
               <span className="flex items-center gap-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -317,9 +348,13 @@ function App() {
               onClick={() => setActiveView("devices")}
               className={`px-6 py-3 text-sm font-medium transition-colors ${
                 activeView === "devices"
-                  ? "text-blue-400 border-b-2 border-blue-500 bg-gray-950"
+                  ? "border-b-2 bg-gray-950"
                   : "text-gray-400 hover:text-gray-300 hover:bg-gray-800"
               }`}
+              style={activeView === "devices" ? {
+                color: "var(--active-indicator)",
+                borderColor: "var(--active-indicator)"
+              } : {}}
             >
               <span className="flex items-center gap-2">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

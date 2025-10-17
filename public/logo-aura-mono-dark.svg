@@ -1,0 +1,8 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- The Responsive Halo - Monochromatic Light (for Dark Mode) -->
+  <path d="M60 20 Q90 30, 95 60 Q90 90, 60 100 Q30 90, 25 60 Q30 30, 60 20 Z"
+        stroke="#F5F5F5"
+        stroke-width="6"
+        fill="none"
+        stroke-linecap="round"/>
+</svg>

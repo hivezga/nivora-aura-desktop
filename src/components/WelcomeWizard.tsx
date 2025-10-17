@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import ThemeSelector from "./ThemeSelector";
 
 interface SetupStatus {
   first_run_complete: boolean;
@@ -14,7 +15,7 @@ interface DownloadProgress {
   percentage: number;
 }
 
-type WizardStep = "checking" | "dependencies" | "downloading" | "complete";
+type WizardStep = "checking" | "dependencies" | "downloading" | "theme" | "complete";
 
 export default function WelcomeWizard({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState<WizardStep>("checking");
@@ -81,15 +82,26 @@ export default function WelcomeWizard({ onComplete }: { onComplete: () => void }
     }
   };
 
-  const handleFinish = async () => {
+  const handleContinueToTheme = async () => {
     try {
       setError(null);
 
       // Check if all dependencies are ready
       if (!status?.whisper_model_exists) {
-        setError("Please download the Whisper model before finishing");
+        setError("Please download the Whisper model before continuing");
         return;
       }
+
+      // Move to theme selection
+      setStep("theme");
+    } catch (err) {
+      setError(`Failed to continue: ${err}`);
+    }
+  };
+
+  const handleThemeComplete = async () => {
+    try {
+      setError(null);
 
       // Mark setup as complete
       await invoke("mark_setup_complete");
@@ -126,7 +138,10 @@ export default function WelcomeWizard({ onComplete }: { onComplete: () => void }
         {/* Content based on step */}
         {step === "checking" && (
           <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-purple-500 mx-auto mb-4"></div>
+            <div
+              className="animate-spin rounded-full h-16 w-16 border-b-2 mx-auto mb-4"
+              style={{ borderColor: "var(--accent-primary)" }}
+            ></div>
             <p className="text-gray-300">Checking system requirements...</p>
           </div>
         )}
@@ -156,7 +171,12 @@ export default function WelcomeWizard({ onComplete }: { onComplete: () => void }
                 {!status.whisper_model_exists && !downloading && (
                   <button
                     onClick={handleDownloadModel}
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-sm transition-colors"
+                    className="px-4 py-2 text-white rounded-lg text-sm transition-colors"
+                    style={{
+                      backgroundColor: "var(--accent-primary)",
+                    }}
+                    onMouseEnter={(e) => e.currentTarget.style.backgroundColor = "var(--active-indicator)"}
+                    onMouseLeave={(e) => e.currentTarget.style.backgroundColor = "var(--accent-primary)"}
                   >
                     Download Model
                   </button>
@@ -164,18 +184,27 @@ export default function WelcomeWizard({ onComplete }: { onComplete: () => void }
               </div>
             </div>
 
-            {/* Finish Button */}
+            {/* Continue Button */}
             <div className="pt-4 flex justify-end">
               <button
-                onClick={handleFinish}
+                onClick={handleContinueToTheme}
                 disabled={!canFinish}
                 className={`px-6 py-3 rounded-lg font-semibold transition-colors ${
                   canFinish
-                    ? "bg-green-600 hover:bg-green-700 text-white"
+                    ? "text-white"
                     : "bg-gray-600 text-gray-400 cursor-not-allowed"
                 }`}
+                style={canFinish ? {
+                  backgroundColor: "var(--accent-primary)",
+                } : {}}
+                onMouseEnter={(e) => {
+                  if (canFinish) e.currentTarget.style.backgroundColor = "var(--active-indicator)";
+                }}
+                onMouseLeave={(e) => {
+                  if (canFinish) e.currentTarget.style.backgroundColor = "var(--accent-primary)";
+                }}
               >
-                {canFinish ? "Finish Setup" : "Complete all steps to continue"}
+                {canFinish ? "Continue to Theme Selection" : "Complete all steps to continue"}
               </button>
             </div>
           </div>
@@ -184,7 +213,7 @@ export default function WelcomeWizard({ onComplete }: { onComplete: () => void }
         {step === "downloading" && (
           <div className="py-12">
             <div className="mb-6 text-center">
-              <div className="animate-pulse text-purple-500 mb-4">
+              <div className="animate-pulse mb-4" style={{ color: "var(--accent-primary)" }}>
                 <svg className="w-16 h-16 mx-auto" fill="currentColor" viewBox="0 0 20 20">
                   <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
                 </svg>
@@ -197,8 +226,11 @@ export default function WelcomeWizard({ onComplete }: { onComplete: () => void }
             <div className="mb-4">
               <div className="bg-gray-700 rounded-full h-4 overflow-hidden">
                 <div
-                  className="bg-purple-600 h-full transition-all duration-300 ease-out"
-                  style={{ width: `${downloadProgress.percentage}%` }}
+                  className="h-full transition-all duration-300 ease-out"
+                  style={{
+                    width: `${downloadProgress.percentage}%`,
+                    backgroundColor: "var(--accent-primary)"
+                  }}
                 ></div>
               </div>
             </div>
@@ -210,6 +242,22 @@ export default function WelcomeWizard({ onComplete }: { onComplete: () => void }
                 {(downloadProgress.downloaded_bytes / 1024 / 1024).toFixed(2)} MB
                 {downloadProgress.total_bytes && ` / ${(downloadProgress.total_bytes / 1024 / 1024).toFixed(2)} MB`}
               </span>
+            </div>
+          </div>
+        )}
+
+        {step === "theme" && (
+          <div className="space-y-6">
+            <ThemeSelector />
+
+            {/* Finish Button */}
+            <div className="pt-4 flex justify-end">
+              <button
+                onClick={handleThemeComplete}
+                className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold transition-colors"
+              >
+                Finish Setup
+              </button>
             </div>
           </div>
         )}

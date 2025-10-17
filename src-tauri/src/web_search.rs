@@ -102,7 +102,7 @@ async fn search_searxng(
     // Create HTTP client with timeout
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .user_agent("AuraDesktop/0.1.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .build()
         .map_err(|e| SearchError::Network(e))?;
 
@@ -152,7 +152,8 @@ async fn search_searxng(
         title: String,
         url: String,
         content: Option<String>,
-        publishedDate: Option<String>,
+        #[serde(rename = "publishedDate")]
+        published_date: Option<String>,
     }
 
     let searxng_response: SearXNGResponse = response.json().await.map_err(|e| {
@@ -174,7 +175,7 @@ async fn search_searxng(
             title: r.title,
             url: r.url,
             snippet: r.content.unwrap_or_else(|| "No snippet available".to_string()),
-            published_date: r.publishedDate.and_then(|d| {
+            published_date: r.published_date.and_then(|d| {
                 DateTime::parse_from_rfc3339(&d)
                     .ok()
                     .map(|dt| dt.with_timezone(&Utc))
@@ -205,7 +206,7 @@ async fn search_brave(
     // Create HTTP client with timeout
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
-        .user_agent("AuraDesktop/0.1.0")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .build()
         .map_err(|e| SearchError::Network(e))?;
 
